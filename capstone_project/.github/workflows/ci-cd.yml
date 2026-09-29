@@ -1,0 +1,47 @@
+name: CI - Build & Push to ECR
+
+on:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-region: ${{ secrets.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Ensure ECR repository exists
+        run: |
+          aws ecr describe-repositories --repository-names "$REPO" || \
+            aws ecr create-repository --repository-name "$REPO"
+        env:
+          REPO: ${{ secrets.ECR_REPOSITORY }}
+
+      - name: Login to ECR
+        run: |
+          aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | \
+            docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
+
+      - name: Build, tag, and push image
+        run: |
+          IMAGE_TAG=${{ github.sha }}
+          REPO=${{ secrets.ECR_REPOSITORY }}
+          ACCOUNT=${{ secrets.AWS_ACCOUNT_ID }}
+          REGION=${{ secrets.AWS_REGION }}
+          docker build -t $REPO:$IMAGE_TAG .
+          docker tag $REPO:$IMAGE_TAG $ACCOUNT.dkr.ecr.$REGION.amazonaws.com/$REPO:$IMAGE_TAG
+          docker push $ACCOUNT.dkr.ecr.$REGION.amazonaws.com/$REPO:$IMAGE_TAG
+        env:
+          DOCKER_BUILDKIT: 1
+
+      - name: Publish image uri
+        run: echo "IMAGE_URI=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ secrets.ECR_REPOSITORY }}:${{ github.sha }}" >> $GITHUB_ENV
