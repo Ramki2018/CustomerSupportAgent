@@ -12,6 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from fastapi import FastAPI, Request
+from contextlib import asynccontextmanager
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import subprocess
@@ -21,8 +22,33 @@ from capstone_agent.agents.full_agent import FullAgent
 from capstone_agent.logging_utils import get_logger
 
 logger = get_logger("deployment")
-app = FastAPI(title="AI Support Resolution Agent")
-agent = FullAgent()
+agent = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Initialize expensive resources on startup and clean up on shutdown.
+
+    Uses FastAPI's Lifespan context manager instead of deprecated on_event.
+    """
+    global agent
+    try:
+        agent = FullAgent()
+        logger.info("FullAgent initialized on startup")
+    except Exception:
+        logger.error("Failed to initialize FullAgent during startup:\n" + traceback.format_exc())
+    try:
+        yield
+    finally:
+        try:
+            if agent is not None and hasattr(agent, "close"):
+                agent.close()
+                logger.info("FullAgent closed on shutdown")
+        except Exception:
+            logger.error("Error while shutting down FullAgent:\n" + traceback.format_exc())
+
+
+app = FastAPI(title="AI Support Resolution Agent", lifespan=lifespan)
 
 
 class ChatRequest(BaseModel):
@@ -59,6 +85,12 @@ def health():
 @app.post("/chat")
 def chat(req: ChatRequest):
     """Graceful failure handling: agent errors never surface as raw 500s to the user."""
+    if agent is None:
+        return JSONResponse(status_code=503, content={
+            "error": "agent_not_ready",
+            "message": "Agent is initializing. Please try again shortly.",
+        })
+
     try:
         reply = agent.handle_message(req.session_id, req.message)
         return {"session_id": req.session_id, "reply": reply}
@@ -128,3 +160,13 @@ def validate(timeout_seconds: int = 60):
     except Exception as exc:  # pragma: no cover - unexpected runtime errors
         logger.error(f"Validation error: {exc}")
         return JSONResponse(status_code=500, content={"error": "validation_failed", "details": str(exc)})
+
+
+if __name__ == "__main__":
+    # Allows `python deployment/app.py` (or an IDE "Run" button) to start the
+    # server directly, in addition to `uvicorn deployment.app:app --reload`.
+    # Passed as an object (not an import string) since `deployment` isn't on
+    # sys.path when this file is run directly, so --reload isn't available here.
+    import uvicorn
+
+    uvicorn.run(app, host="127.0.0.1", port=8000)
