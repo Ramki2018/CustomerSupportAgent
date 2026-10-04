@@ -7,7 +7,7 @@ Safeguards demonstrated:
 """
 import json
 
-from ..logging_utils import get_logger, log_interaction
+from ..logging_utils import get_logger, log_interaction, sanitize_user_message
 from ..safety import check as safety_check
 from ..tools import TOOL_SCHEMAS, ToolError, ToolRegistry
 from .rag_agent import DEFAULT_VARIANT, PROMPT_VARIANTS, RagAgent
@@ -21,22 +21,23 @@ class ToolAgent(RagAgent):
         self.tool_registry = ToolRegistry()
 
     def respond(self, session_id: str, message: str, variant: str | None = None) -> str:
-        log_interaction(session_id, "user", message)
-        decision = safety_check(message)
+        safe_message = sanitize_user_message(message)
+        log_interaction(session_id, "user", safe_message)
+        decision = safety_check(safe_message)
         if not decision.allowed:
             if decision.escalate:
                 self.tool_registry.execute(
-                    "escalate_to_human", {"reason": message[:120], "session_id": session_id}, 0
+                    "escalate_to_human", {"reason": safe_message[:120], "session_id": session_id}, 0
                 )
             log_interaction(session_id, "assistant", decision.reason, {"safety_block": True})
             return decision.reason
 
         system_prompt = PROMPT_VARIANTS[variant or self.variant]
-        results = self.kb.search(message)
+        results = self.kb.search(safe_message)
         if results:
             context = "\n\n".join(f"[{c.doc_id}] {c.text}" for _, c in results)
             system_prompt += f"\n\nRETRIEVED CONTEXT:\n{context}"
-        messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": message}]
+        messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": safe_message}]
 
         call_count = 0
         while True:

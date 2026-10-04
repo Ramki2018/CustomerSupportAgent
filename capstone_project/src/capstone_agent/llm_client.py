@@ -45,10 +45,12 @@ class MockLLM:
 
     @staticmethod
     def _extract_retrieved_context(messages: list) -> str:
-        marker = "RETRIEVED CONTEXT:\n"
+        markers = ("RETRIEVED CONTEXT:\n", "Retrieved context:\n", "POLICY CONTEXT:\n")
         for m in messages:
-            if m["role"] == "system" and marker in m["content"]:
-                return m["content"].split(marker, 1)[1]
+            content = m.get("content") or ""
+            for marker in markers:
+                if marker in content:
+                    return content.split(marker, 1)[1]
         return ""
 
     @staticmethod
@@ -62,8 +64,15 @@ class MockLLM:
     @staticmethod
     def _compose_answer(retrieved: str, style: str) -> str:
         if retrieved.strip():
-            snippet = retrieved.strip().split("\n")[0][:280]
-            base = f"Based on our policy documentation: {snippet}"
+            text_lines = [line.strip() for line in retrieved.splitlines() if line.strip()]
+            policy_text = ""
+            for line in text_lines:
+                if line.startswith("TEXT:"):
+                    policy_text = line.split("TEXT:", 1)[1].strip()
+                    break
+            if not policy_text:
+                policy_text = text_lines[0][:280]
+            base = f"Based on our policy documentation: {policy_text}"
         else:
             base = ("I don't have specific documentation on that topic, so I don't want to guess. "
                     "I can escalate this to a human support specialist if you'd like.")

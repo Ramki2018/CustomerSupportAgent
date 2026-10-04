@@ -46,9 +46,10 @@ flowchart TD
 ## Safety Approach
 Deterministic, regex/rule-based checks in `safety.py` run **before** any LLM call, so
 refusal/escalation cannot be argued away by a prompt-injected user message. PII redaction
-in `logging_utils.py` runs on every log write, independent of which agent phase produced
-the content. Tool loop-prevention (`ToolRegistry.max_calls_per_turn`) guarantees the agent
-can't spin indefinitely — it always terminates in a bounded number of steps or escalates.
+in `logging_utils.py` now also runs before user text is handed to memory, retrieval, or the
+LLM, so sensitive content is masked at the boundary rather than only after the fact. Tool
+loop-prevention (`ToolRegistry.max_calls_per_turn`) guarantees the agent can't spin
+indefinitely — it always terminates in a bounded number of steps or escalates.
 
 ## Deployment Assumptions & Limitations
 - Runs as a single-process FastAPI app (`deployment/app.py`); suitable for a small team

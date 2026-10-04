@@ -3,26 +3,35 @@
 Run with (from project root, after `pip install -r requirements.txt`):
     uvicorn deployment.app:app --reload
 """
+import subprocess
 import sys
 import time
 import traceback
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from fastapi import FastAPI, Request
-from contextlib import asynccontextmanager
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-import subprocess
-import sys
 
-from capstone_agent.agents.full_agent import FullAgent
+from capstone_agent import config
+from capstone_agent.feedback import FeedbackStore
+from capstone_agent.graph.app import build_graph
+from capstone_agent.langchain_runtime import get_chat_model, warm_up_langchain_runtime
 from capstone_agent.logging_utils import get_logger
+from capstone_agent.logging_utils import sanitize_user_message
+from capstone_agent.rag.embeddings import get_embedding_provider
+from capstone_agent.rag.vector_store import QdrantVectorStore
 
 logger = get_logger("deployment")
-agent = None
+graph = None
+embedding_provider = None
+vector_store = None
+model_client = None
+feedback_store = None
 
 
 @asynccontextmanager
@@ -31,19 +40,47 @@ async def lifespan(app: FastAPI):
 
     Uses FastAPI's Lifespan context manager instead of deprecated on_event.
     """
-    global agent
+    global graph, embedding_provider, vector_store, model_client, feedback_store
     try:
-        agent = FullAgent()
-        logger.info("FullAgent initialized on startup")
+        # 1) load env already happens via config import
+        # 2) create Qdrant connection
+        embedding_provider = get_embedding_provider()
+        embedding_dim = len(embedding_provider.embed_query("dimension probe"))
+        vector_store = QdrantVectorStore(
+            collection_name=config.QDRANT_COLLECTION,
+            vector_size=embedding_dim,
+            url=config.QDRANT_URL,
+            api_key=config.QDRANT_API_KEY or None,
+        )
+        try:
+            vector_store.ensure_collection()
+            logger.info("Qdrant connection initialized on startup")
+        except Exception:
+            logger.warning("Qdrant connection could not be initialized during startup:\n" + traceback.format_exc())
+
+        # 3) load embeddings
+        logger.info("Embedding provider initialized on startup: %s", embedding_provider.__class__.__name__)
+
+        # 4) load graph
+        graph = build_graph()
+        logger.info("LangGraph support graph initialized on startup")
+
+        # 5) warm up model if needed
+        model_client = get_chat_model()
+        warm_up_langchain_runtime()
+        if model_client is not None:
+            logger.info("LangChain model client initialized on startup")
+
+        feedback_store = FeedbackStore()
     except Exception:
-        logger.error("Failed to initialize FullAgent during startup:\n" + traceback.format_exc())
+        logger.error("Failed to initialize graph during startup:\n" + traceback.format_exc())
     try:
         yield
     finally:
         try:
-            if agent is not None and hasattr(agent, "close"):
-                agent.close()
-                logger.info("FullAgent closed on shutdown")
+            if graph is not None and hasattr(graph, "close"):
+                graph.close()
+                logger.info("Graph closed on shutdown")
         except Exception:
             logger.error("Error while shutting down FullAgent:\n" + traceback.format_exc())
 
@@ -84,18 +121,34 @@ def health():
 
 @app.post("/chat")
 def chat(req: ChatRequest):
-    """Graceful failure handling: agent errors never surface as raw 500s to the user."""
-    if agent is None:
+    """Run the compiled graph and return either an answer or escalation payload."""
+    if graph is None:
         return JSONResponse(status_code=503, content={
-            "error": "agent_not_ready",
-            "message": "Agent is initializing. Please try again shortly.",
+            "error": "graph_not_ready",
+            "message": "Graph is initializing. Please try again shortly.",
         })
 
     try:
-        reply = agent.handle_message(req.session_id, req.message)
-        return {"session_id": req.session_id, "reply": reply}
+        sanitized_message = sanitize_user_message(req.message)
+        result = graph.invoke({
+            "session_id": req.session_id,
+            "user_message": sanitized_message,
+            "metadata": {"request_id": str(uuid.uuid4())},
+        })
+        if result.get("escalate"):
+            return {
+                "session_id": req.session_id,
+                "reply": result.get("answer", "This case should be handled by a human support agent."),
+                "escalation_context": result.get("escalation_context", {}),
+            }
+        return {
+            "session_id": req.session_id,
+            "reply": result.get("answer", ""),
+            "citations": result.get("citations", []),
+            "follow_up_suggestions": result.get("follow_up_suggestions", []),
+        }
     except Exception as exc:
-        logger.error(f"Agent failure for session {req.session_id}: {exc}")
+        logger.error(f"Graph failure for session {req.session_id}: {exc}")
         return JSONResponse(
             status_code=200,
             content={
@@ -108,7 +161,12 @@ def chat(req: ChatRequest):
 
 @app.post("/feedback")
 def feedback(req: FeedbackRequest):
-    agent.record_feedback(req.session_id, req.rating, req.comment)
+    if feedback_store is None:
+        return JSONResponse(status_code=503, content={
+            "error": "feedback_not_ready",
+            "message": "Feedback store is initializing. Please try again shortly.",
+        })
+    feedback_store.add(req.session_id, req.rating, req.comment)
     return {"status": "recorded"}
 
 

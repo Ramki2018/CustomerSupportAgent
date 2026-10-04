@@ -6,7 +6,7 @@ import json
 import re
 
 from ..feedback import FeedbackStore
-from ..logging_utils import get_logger, log_interaction
+from ..logging_utils import get_logger, log_interaction, sanitize_user_message
 from ..memory import ConversationMemory
 from ..safety import check as safety_check
 from ..tools import TOOL_SCHEMAS, ToolError
@@ -40,14 +40,15 @@ class FullAgent(ToolAgent):
 
     def handle_message(self, session_id: str, message: str) -> str:
         memory = self._memory(session_id)
-        memory.add_turn("user", message)
-        log_interaction(session_id, "user", message)
+        safe_message = sanitize_user_message(message)
+        memory.add_turn("user", safe_message)
+        log_interaction(session_id, "user", safe_message)
 
-        decision = safety_check(message)
+        decision = safety_check(safe_message)
         if not decision.allowed:
             if decision.escalate:
                 self.tool_registry.execute(
-                    "escalate_to_human", {"reason": message[:120], "session_id": session_id}, 0
+                    "escalate_to_human", {"reason": safe_message[:120], "session_id": session_id}, 0
                 )
             memory.add_turn("assistant", decision.reason)
             log_interaction(session_id, "assistant", decision.reason, {"safety_block": True})
@@ -55,21 +56,21 @@ class FullAgent(ToolAgent):
 
         # Memory: remember the last order ID mentioned, and resolve pronoun references
         # ("that order" / "it") to it in later turns within the same session.
-        order_match = _ORDER_ID_PATTERN.search(message)
+        order_match = _ORDER_ID_PATTERN.search(safe_message)
         if order_match:
             memory.remember("last_order_id", order_match.group(0))
-        elif memory.recall("last_order_id") and _PRONOUN_REF_PATTERN.search(message):
-            resolved = f"{message} (referring to order {memory.recall('last_order_id')})"
+        elif memory.recall("last_order_id") and _PRONOUN_REF_PATTERN.search(safe_message):
+            resolved = f"{safe_message} (referring to order {memory.recall('last_order_id')})"
             memory.short_term[-1]["content"] = resolved
-            message = resolved
+            safe_message = resolved
 
         # Adaptive behaviour: shift prompt strategy based on recent user feedback.
         hints = self.feedback_store.preference_hints()
         variant = "v3_role_constraints_concise" if hints.get("prefer_concise") else self.variant
 
-        plan = self._plan(message)
+        plan = self._plan(safe_message)
         system_prompt = PROMPT_VARIANTS[variant] + f"\n\nPLAN: {plan}"
-        results = self.kb.search(message)
+        results = self.kb.search(safe_message)
         if results:
             context = "\n\n".join(f"[{c.doc_id}] {c.text}" for _, c in results)
             system_prompt += f"\n\nRETRIEVED CONTEXT:\n{context}"

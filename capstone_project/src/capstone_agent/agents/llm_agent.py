@@ -4,7 +4,7 @@ Required method (Prompt Comparison Rule): `compare_prompts` runs the same
 question set across all prompt variants for a side-by-side comparison table.
 """
 from ..llm_client import get_llm_client
-from ..logging_utils import get_logger, log_interaction
+from ..logging_utils import get_logger, log_interaction, sanitize_user_message
 from ..safety import check as safety_check
 
 logger = get_logger("llm_agent")
@@ -31,14 +31,15 @@ class LLMAgent:
         self.variant = variant
 
     def respond(self, session_id: str, message: str, variant: str | None = None) -> str:
-        log_interaction(session_id, "user", message)
-        decision = safety_check(message)
+        safe_message = sanitize_user_message(message)
+        log_interaction(session_id, "user", safe_message)
+        decision = safety_check(safe_message)
         if not decision.allowed:
             log_interaction(session_id, "assistant", decision.reason, {"safety_block": True})
             return decision.reason
 
         system_prompt = PROMPT_VARIANTS[variant or self.variant]
-        messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": message}]
+        messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": safe_message}]
         result = self.llm.chat(messages)
         content = result["content"] or ""
         log_interaction(session_id, "assistant", content, {"prompt_variant": variant or self.variant})

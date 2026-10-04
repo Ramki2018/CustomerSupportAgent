@@ -1,4 +1,9 @@
-"""Logging utilities with PII redaction (Safety Requirement: no personal data in logs)."""
+"""Logging utilities with PII redaction.
+
+The same redaction helper is also reused before user text is passed to memory,
+retrieval, or an LLM so personal data does not leave the pre-processing layer.
+"""
+import copy
 import json
 import logging
 import re
@@ -9,12 +14,23 @@ from . import config
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 _PHONE_RE = re.compile(r"\b(?:\+?\d[\s-]?){9,15}\b")
 _CARD_RE = re.compile(r"\b(?:\d[ -]*?){13,19}\b")
+_NAME_RE = re.compile(r"\b(my name is|i am|i'm|this is)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\b", re.IGNORECASE)
+_ADDRESS_RE = re.compile(
+    r"\b\d{1,5}\s+(?:[A-Za-z0-9]+\s+){0,4}"
+    r"(?:street|st\.?|road|rd\.?|avenue|ave\.?|lane|ln\.?|drive|dr\.?|"
+    r"boulevard|blvd\.?|way|court|ct\.?|terrace|ter\.?|place|pl\.?|suite|ste\.?|apartment|apt\.?)\b",
+    re.IGNORECASE,
+)
+_ACCOUNT_RE = re.compile(
+    r"\b(?:account|acct|member|customer)\s*(?:id|number|no\.?|#)?\s*[:#-]?\s*[A-Z0-9][A-Z0-9-]{5,}\b",
+    re.IGNORECASE,
+)
 _ORDER_ID_KEEP_RE = re.compile(r"\bORD-\d{3,}\b")  # order IDs are not PII, keep them readable
 _TICKET_ID_KEEP_RE = re.compile(r"\bESC-\d{3,}\b")
 
 
 def redact_pii(text: str) -> str:
-    """Strip emails/phone numbers/card-like numbers before anything is written to disk."""
+    """Strip common PII before anything is written to disk or sent to a model."""
     if not text:
         return text
     placeholders: dict = {}
@@ -26,18 +42,28 @@ def redact_pii(text: str) -> str:
 
     text = _ORDER_ID_KEEP_RE.sub(_keep, text)
     text = _TICKET_ID_KEEP_RE.sub(_keep, text)
+    text = _NAME_RE.sub(lambda m: f"{m.group(1)} [REDACTED_NAME]", text)
+    text = _ADDRESS_RE.sub("[REDACTED_ADDRESS]", text)
+    text = _ACCOUNT_RE.sub("[REDACTED_ACCOUNT_ID]", text)
     text = _EMAIL_RE.sub("[REDACTED_EMAIL]", text)
-    text = _CARD_RE.sub("[REDACTED_NUMBER]", text)
-    text = _PHONE_RE.sub("[REDACTED_NUMBER]", text)
+    text = _CARD_RE.sub("[REDACTED_CARD_NUMBER]", text)
+    text = _PHONE_RE.sub("[REDACTED_PHONE_NUMBER]", text)
     for token, original in placeholders.items():
         text = text.replace(token, original)
     return text
 
 
+def sanitize_user_message(text: str) -> str:
+    """Return a model-safe version of user text by applying the redaction rules."""
+    return redact_pii(text)
+
+
 class PIISafeFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
-        record.msg = redact_pii(str(record.msg))
-        return super().format(record)
+        safe_record = copy.copy(record)
+        safe_record.msg = redact_pii(str(record.getMessage()))
+        safe_record.args = ()
+        return super().format(safe_record)
 
 
 def get_logger(name: str) -> logging.Logger:
