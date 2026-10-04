@@ -1,25 +1,25 @@
-"""Conditional routing helpers for the LangGraph workflow.
+"""Conditional routing helpers for the support-agent graph.
 
-These functions map graph state to the next node name. They are intentionally
-small and deterministic so the graph is easy to inspect and debug.
+Pure functions of state, so every branch decision is deterministic, unit-testable,
+and visible in the LangSmith trace.
 """
 
 from __future__ import annotations
 
 from typing import Literal
 
-from .state import AgentState
-
-RouteName = Literal["refuse", "retrieve", "escalate", "generate"]
+from .state import SupportState
 
 
-def route_after_safety(state: AgentState) -> RouteName:
-    if not state["is_safe"]:
-        return "refuse"
-    return "retrieve"
+def route_after_safety(state: SupportState) -> Literal["escalate", "resolve_memory"]:
+    """Unsafe requests go straight to escalation; the LLM is never called for them."""
+    return "resolve_memory" if state.get("is_safe", True) else "escalate"
 
 
-def route_after_verification(state: AgentState) -> RouteName:
-    if state["verification_result"]["needs_escalation"] or state.get("escalate"):
-        return "escalate"
-    return "generate"
+def route_after_agent(state: SupportState) -> Literal["tools", "finalize"]:
+    return "tools" if state.get("pending_tool_calls") else "finalize"
+
+
+def route_after_tools(state: SupportState) -> Literal["escalate", "agent"]:
+    """The tool loop guard sets `needs_ticket`; otherwise return to the agent."""
+    return "escalate" if state.get("needs_ticket") else "agent"

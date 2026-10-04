@@ -75,5 +75,5 @@ def test_user_message_is_sanitized_before_model_use(monkeypatch):
     assert "[REDACTED_CARD_NUMBER]" in user_message
     assert "[REDACTED_ACCOUNT_ID]" in user_message
 
-    recent_user_turn = agent._memory("test-session-sanitize").get_recent_context()[0]["content"]
-    assert recent_user_turn == expected
+    values = agent.graph.get_state(agent.thread_config("test-session-sanitize")).values
+    assert values["history"][0]["content"] == expected

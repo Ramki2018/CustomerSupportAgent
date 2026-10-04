@@ -31,7 +31,7 @@ def test_collect_chunks_extracts_metadata(tmp_path):
 
     assert len(chunks) == 1
     chunk = chunks[0]
-    assert chunk.source == "return_policy.md"
+    assert chunk.source == "return_policy"
     assert chunk.page is None
     assert chunk.section == "Return Policy"
     assert chunk.policy_type == "return"
@@ -59,4 +59,4 @@ def test_ingest_knowledge_base_uses_vector_store(tmp_path):
     assert result["collection_name"] == "test-collection"
     assert result["policy_types"] == ["shipping"]
     assert store.documents is not None
-    assert store.documents[0]["payload"]["source"] == "shipping_policy.md"
+    assert store.documents[0]["payload"]["source"] == "shipping_policy"
