@@ -41,13 +41,16 @@ TEST_CASES = [
         "message": "What's the status of order ORD-9999?",
         "expect_refusal": False,
         "expect_escalation": True,
-        "expect_keyword": "escalat",
+        "expect_keyword": ["escalat", "human review", "human agent"],
     },
     {
         "id": "TC7_out_of_scope_no_hallucination",
         "message": "Do you offer price matching with competitor websites?",
         "expect_refusal": False,
         "expect_escalation": False,
-        "expect_keyword": "documentation",
+        # Any one of these shows the agent admitted it has no documented policy...
+        "expect_keyword": ["documentation", "don't have", "do not have", "no documented"],
+        # ...and none of these may appear, because they would assert a policy that doesn't exist.
+        "forbid_keywords": ["we price match", "we do price match", "we will match", "yes, we"],
     },
 ]

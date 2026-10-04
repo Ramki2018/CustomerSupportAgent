@@ -21,8 +21,6 @@ services:
     environment:
       QDRANT_URL: http://qdrant:6333
       QDRANT_COLLECTION: customer_support_policies
-      USE_REAL_LANGGRAPH: "true"
-      LANGCHAIN_TRACING_V2: "false"
       APP_ENV: production
     ports:
       - "8000:8000"
@@ -30,3 +28,4 @@ services:
 
 volumes:
   qdrant_storage:
+

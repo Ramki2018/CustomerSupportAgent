@@ -9,7 +9,7 @@
 |:--|:---|:---:|:---:|:---|
 | 1 | **Clarity & Readability** | 10 | 9 | Strong structure, consistent headings, and easy-to-scan tables/diagrams. Minor: a few sections still read like a proposal rather than a finalized architecture note. |
 | 2 | **Technical Accuracy** | 10 | 7 | The document is directionally correct, but several labels still do not match the current implementation exactly. The code now uses Qdrant-backed semantic retrieval with a TF-IDF fallback, while the blueprint still references Laya and BGE-M3 without grounding them in the actual shipped stack. |
-| 3 | **Architecture Coverage** | 10 | 9 | Covers the major subsystems well: ingestion, safety, retrieval, verification, generation, escalation, and deployment direction. |
+| 3 | **Architecture Coverage** | 10 | 9 | Covers the major subsystems well: ingestion, safety, retrieval, grounding/provenance, generation, escalation, and deployment direction. (LLM-based evidence verification is documented as future work.) |
 | 4 | **Suitability Analysis Depth** | 10 | 8 | Good discussion of why the proposed target architecture is useful and what it improves. The latest implementation evidence now supports the retrieval and multi-step claims better than before. |
 | 5 | **Mermaid Diagrams Quality** | 10 | 8 | Clean, readable, and presentation-friendly. Would be stronger with explicit error/retry branches and a clearer distinction between current code and proposed target state. |
 | 6 | **Migration Roadmap Completeness** | 10 | 7 | The phased plan is practical, but rollback and phase-gate success criteria are still light. |

@@ -14,7 +14,7 @@ Create a clean, slide-friendly **architecture diagram** for a customer support A
 - Retrieval layer: Qdrant semantic search + TF-IDF fallback + knowledge base
 - Agent orchestration: planning + tool routing + prompt selection
 - Tools: order status, return eligibility, escalation ticket creation
-- LLM layer: MockLLM offline mode + OpenAI/LangChain live mode
+- LLM layer: MockLLM offline mode + OpenAI live mode, orchestrated by a LangGraph workflow (redact → safety → memory → retrieve → agent ⇄ tools → finalize/escalate)
 - Storage: logs, feedback, evaluation artifacts
 
 ### Show these flows

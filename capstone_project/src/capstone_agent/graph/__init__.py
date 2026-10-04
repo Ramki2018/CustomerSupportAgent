@@ -1,5 +1,5 @@
 """LangGraph orchestration package for the support agent."""
 
-from .state import AgentState
+from .state import SupportState
 
-__all__ = ["AgentState"]
+__all__ = ["SupportState"]

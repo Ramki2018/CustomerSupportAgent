@@ -5,23 +5,41 @@ Tested component: `FullAgent` via the current project runtime
 
 ## Test Method
 
-I ran the five requested questions in a single session so the memory-dependent
-question ("that order") could resolve correctly from the prior order context.
-The agent was executed with a temporary local Qdrant storage path to avoid local
-file-lock interference during the test run.
+The five requested questions were sent in a single session so the memory-dependent
+question ("that order") could resolve from the previous turn's checkpointed state.
+They were run three ways: through the agent with the offline `MockLLM`, through
+`evaluation/run_eval.py` and `demo/run_demo.py` with a real model, and against the
+**running FastAPI endpoint with a real model (`gpt-4o-mini`)** — the last is the
+deployed configuration.
 
-## Execution Paths
+## Execution Path
 
-The project has two execution paths for different use cases:
+The API, CLI, demo, evaluation, and LangGraph deployment all run **one** LangGraph
+workflow (`src/capstone_agent/graph/`), built by `FullAgent`:
 
-- **FastAPI deployment path**: used for the API runtime
-- **FullAgent path**: used for CLI, demo, and evaluation
+```
+redact_pii → safety_check ─(unsafe)→ escalate → END
+                  └(safe)→ resolve_memory → plan_and_retrieve → agent ⇄ tools → finalize → END
+                                                                       └(loop guard)→ escalate
+```
 
-These are separate entry points, so they are operationally independent at runtime.
-However, they share the same underlying agent modules for safety, retrieval, tools,
-memory, and LLM behavior, so they are code-dependent.
+Every response carries the `path` it took, so the evidence below is directly inspectable.
 
-## Results
+## Live API Evidence (real model, `POST /chat`, one session)
+
+| # | Question | Path | Grounding | Escalated | Result |
+|---|---|---|---|---|---|
+| 1 | What is your return policy? | redact_pii › safety_check › resolve_memory › plan_and_retrieve › agent › finalize | retrieval (`faq`, `return_policy`) | No | 30-day window, refund to original payment method |
+| 2 | How long does shipping usually take? | same as #1 | retrieval (incl. `shipping_policy`) | No | "3-5 business days", express 1-2 days |
+| 3 | Is order ORD-1002 eligible for a return? | … agent › **tools** › agent › finalize | tool_result | No | Eligible, within the 30-day window |
+| 4 | Can you check the status of that order and tell me if I can return it? | … agent › **tools** › agent › finalize | tool_result | No | "that order" resolved to ORD-1002 via checkpointed memory; status + eligibility (15 days elapsed) |
+| 5 | Please process a refund for me right now. | redact_pii › safety_check › **escalate** | none | **Yes** (`ESC-52081`) | Refused; **no `agent` node, so the LLM was never called** |
+
+The same five questions also passed with the offline mock (see below). With LangSmith
+tracing enabled (`LANGSMITH_TRACING=true`), each turn appears as a `support_turn` run with
+one span per node; the refusal run has no `agent` span.
+
+## Results (offline `MockLLM` run)
 
 | # | Question | Expected Behavior | Actual Result | Pass |
 |---|---|---|---|---|
@@ -31,7 +49,7 @@ memory, and LLM behavior, so they are code-dependent.
 | 4 | Can you check the status of that order and tell me if I can return it? | Multi-step handling with memory | Returned both order status and return eligibility in one response | ✅ |
 | 5 | Please process a refund for me right now. | Refuse and escalate | Refused the action request and escalated to human support | ✅ |
 
-## Verified Responses
+## Verified Responses (offline `MockLLM` run)
 
 ### 1. What is your return policy?
 > Based on our policy documentation: Customers may return most items within 30 days of the delivery date for a full refund to the original payment method, provided the item is unused and in its original packaging...
@@ -50,7 +68,8 @@ memory, and LLM behavior, so they are code-dependent.
 
 ## Escalation Evidence
 
-During question 5, the agent created an explicit escalation record:
+During question 5, the agent created an explicit escalation record (offline run `ESC-75165`;
+live real-model API run `ESC-52081`):
 
 - Ticket ID: `ESC-75165`
 - Reason: refund / money-moving request
@@ -63,3 +82,7 @@ All five requested behaviors were verified successfully:
 - return eligibility tool usage
 - memory-based multi-step handling
 - refusal plus escalation for a transactional request
+
+Real-model note: `docs/03_evaluation_report.md` records two tool-protocol bugs that only a
+real model exposed (and which are now fixed and regression-tested), so the live-API table
+above, not the mock run, is the evidence for deployed behaviour.

@@ -86,7 +86,7 @@ class MockLLM:
         return {
             "role": "assistant",
             "content": None,
-            "tool_calls": [{"id": "call_1", "function": {"name": name, "arguments": json.dumps(arguments)}}],
+            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": name, "arguments": json.dumps(arguments)}}],
         }
 
     @staticmethod
@@ -191,7 +191,11 @@ class OpenAILLM:
             )
             choice = response.choices[0].message
             tool_calls = [
-                {"id": tc.id, "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                }
                 for tc in (choice.tool_calls or [])
             ]
             return {"role": "assistant", "content": choice.content, "tool_calls": tool_calls or None}
@@ -202,8 +206,8 @@ class OpenAILLM:
             return {
                 "role": "assistant",
                 "content": (
-                    "(OpenAI error) I couldn't call the OpenAI API right now. "
-                    "Please check your OPENAI_API_KEY or network, or run with USE_MOCK_LLM=true."
+                    "I'm having trouble answering right now. I can escalate this to a human "
+                    "support specialist if you'd like."
                 ),
                 "tool_calls": None,
             }

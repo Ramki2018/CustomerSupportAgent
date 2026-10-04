@@ -1,6 +1,6 @@
 """Simple smoke test for the deployed FastAPI app.
 
-Sends requests to /health, /chat, /feedback, /validate and prints results.
+Sends requests to /health, /chat and /feedback and prints results.
 """
 import json
 import sys
@@ -43,12 +43,6 @@ print(out)
 
 print('\n3) POST /feedback')
 code, out = do_post_json(f'{BASE}/feedback', {'session_id': 'smoke-test', 'rating': 5, 'comment': 'looks good'})
-print('status:', code)
-print(out)
-
-print('\n4) POST /validate (short timeout)')
-# validate endpoint accepts timeout_seconds query param; use POST with ?timeout_seconds=10
-code, out = do_post_json(f'{BASE}/validate?timeout_seconds=10', {})
 print('status:', code)
 print(out)
 

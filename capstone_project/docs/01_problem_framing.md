@@ -1,7 +1,7 @@
 # Problem Framing Document
 
 ## 1. Scenario
-**Scenario 3 — Customer Support: AI Support Resolution Agent** (Track B, Framework-Free).
+**Scenario 3 — Customer Support: AI Support Resolution Agent** (framework-free agent core; see [04_engineering_justification.md](04_engineering_justification.md)).
 
 ## 2. Primary User Persona & Workflow
 **Persona:** Priya, an online retail customer who just bought a product and has a

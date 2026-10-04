@@ -42,7 +42,7 @@ Please include these major components in the diagram:
    - escalation ticket creation
 8. **LLM Layer**
    - MockLLM for offline mode
-   - OpenAI / LangChain for live mode
+   - OpenAI (live mode) / MockLLM (offline mode), orchestrated by a LangGraph workflow
 9. **Storage / Observability**
    - logs
    - feedback store

@@ -1,3 +1,12 @@
+> **Status: historical — superseded.** This gap analysis was written against an earlier
+> prototype (TF-IDF retrieval, hand-written agent loop). Most of the "missing" items it lists
+> now exist: Qdrant-backed retrieval with a TF-IDF fallback, PII redaction, deterministic
+> safety routing, explicit escalation tickets, and a LangGraph workflow. Items such as
+> BGE-M3 embeddings, LLM-based structured evidence verification, and durable checkpoint
+> storage remain **unimplemented future work**. For the current design and evidence see
+> [04_engineering_justification.md](04_engineering_justification.md) and
+> [evidence.md](evidence.md).
+
 # 🔍 Gap Analysis Report
 ## Blueprint vs. Current Project — What's Missing?
 ### Reference: `architecture_blueprint.md` ↔ `capstone_project/`

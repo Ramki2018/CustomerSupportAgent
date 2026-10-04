@@ -18,12 +18,12 @@ The architecture directly addresses the main limitations of the original prototy
 
 | Dimension | Current Architecture (`capstone_project`) | Proposed Architecture (Target Blueprint) | Upgrade Impact & Benefit |
 | :--- | :--- | :--- | :--- |
-| **Workflow Orchestration** | Framework-free manual loops in [`full_agent.py`](../src/capstone_agent/agents/full_agent.py) | Modular node-based flow with explicit safety, retrieval, verification, and response steps | Clean separation of concerns, clearer multi-step branching, and easier debugging. |
+| **Workflow Orchestration** | LangGraph `StateGraph` in [`graph/app.py`](../src/capstone_agent/graph/app.py), built by [`full_agent.py`](../src/capstone_agent/agents/full_agent.py): PII redaction, safety gate, memory, plan & retrieve, agent ⇄ tools loop, escalation, finalize | Same graph hosted on LangGraph Platform with a durable checkpointer | Explicit, traceable control flow; the LLM node is structurally unreachable for refused requests. |
 | **Knowledge Base & Ingestion** | Markdown policy files in `data/knowledge_base/` read directly at startup | Qdrant-backed retrieval over the same policy corpus, with a TF-IDF fallback for offline/demo use | Improves grounding while keeping the project runnable without Docker. |
 | **Vector DB & Retrieval** | TF-IDF cosine similarity in [`retrieval.py`](../src/capstone_agent/retrieval.py) | Semantic Qdrant search with sentence-transformer embeddings and deterministic policy-type boosting | Fixes the earlier shipping-policy recall gap while preserving reproducibility. |
 | **Privacy & PII Protection** | PII redacted before memory/retrieval/LLM calls, with sanitized logs on write | Pre-processing PII redaction plus explicit no-PII escalation payloads | Privacy-by-design: keeps sensitive values out of model-facing and escalation paths. |
 | **Safety & Policy Guardrails** | Regex pattern matching in [`safety.py`](../src/capstone_agent/safety.py) | Deterministic refusal rules with explicit escalation ticket creation | Predictable handling of unsafe requests and transactional asks. |
-| **Verification & Confidence** | Basic evidence sufficiency check plus grounded response generation | Structured evidence checking with confidence-aware escalation behavior | Reduces policy fabrication and improves handoff quality when evidence is insufficient. |
+| **Verification & Confidence** | Deterministic grounding label and source provenance in the `finalize` node; the reply always names any ticket that was created. LLM-based structured evidence verification is **not implemented** | Structured evidence checking with confidence-aware escalation behavior | Future work: reduces policy fabrication further and improves handoff quality when evidence is insufficient. |
 | **Response & UX** | Grounded answer + citations + follow-up suggestions | Grounded answer + citations + follow-up suggestions + explicit escalation messaging | Keeps responses transparent and support-friendly. |
 
 ---
@@ -51,29 +51,30 @@ flowchart TD
         UserQuery["Customer Query\ne.g., 'Can I return my laptop after 45 days?'"]:::inputStyle
     end
 
-    subgraph LangGraph_Workflow ["4. LangGraph Agent Workflow Engine"]
-        Node1["Step 1: PII Detection & Redaction\nMasks Name, Email, Phone, Address, Account ID"]:::graphNode
-        Node2{"Step 2: Safety & Prohibited Request Check\n(Deterministic rules)"}:::graphNode
-        Node3["Step 3: Policy Retrieval\nQdrant semantic search + TF-IDF fallback"]:::graphNode
-        Node4{"Step 4: Evidence Verification & Decision\nStructured evidence check"}:::graphNode
-        Node5["Step 5: Answer Generation\nMockLLM or OpenAI/LangChain"]:::graphNode
+    subgraph LangGraph_Workflow ["4. LangGraph Agent Workflow Engine (implemented: graph/app.py)"]
+        Node1["redact_pii\nMasks Name, Email, Phone, Address, Account ID; resets per-turn state"]:::graphNode
+        Node2{"safety_check\n(Deterministic rules)"}:::graphNode
+        Node3["resolve_memory + plan_and_retrieve\nOrder ID / pronoun memory, feedback-adapted prompt,\nQdrant semantic search + TF-IDF fallback"]:::graphNode
+        Node4{"agent ⇄ tools loop\nMockLLM or OpenAI; validated, loop-guarded tools"}:::graphNode
+        Node5["finalize\nSources, grounding label, ticket named in reply"]:::graphNode
     end
 
     subgraph Outputs ["Responses & Escalation"]
         RefusalReply["Refusal Response\nPolite refusal with policy reference"]:::safetyNode
-        Escalation["6. Human Support Team Escalation\nTicket created with sanitized context (No PII)"]:::escNode
-        FinalAnswer["7. Final Response to Customer\nGrounded Answer + Citations + Follow-ups"]:::successNode
+        Escalation["escalate\nTicket created with sanitized context (No PII)"]:::escNode
+        FinalAnswer["Final Response to Customer\nGrounded answer + sources + escalation status"]:::successNode
     end
 
     %% Workflow Connections
     UserQuery --> Node1
     Node1 --> Node2
     Node2 -- Unsafe / Prohibited --> RefusalReply
+    RefusalReply --> Escalation
     Node2 -- Safe --> Node3
     Qdrant <--> Node3
     Node3 --> Node4
-    Node4 -- Low Confidence / Insufficient Policy --> Escalation
-    Node4 -- Sufficient Evidence (High Confidence) --> Node5
+    Node4 -- Tool loop guard tripped --> Escalation
+    Node4 -- Final reply --> Node5
     Node5 --> FinalAnswer
 
     class Qdrant dbStyle;
@@ -108,18 +109,16 @@ flowchart TD
   - *Raw*: `"Hi, I'm John Doe. My email is john@example.com and my order is ORD-1002. I was double charged."`
   - *Sanitized*: `"Hi, I'm [NAME]. My email is [EMAIL] and my order is [ORDER_ID]. I was double charged."`
 
-### 4.3 Two-Tier Safety & Verification Pipeline
-1. **Tier 1 - Safety & Prohibited Request Check**:
-   - Classifies query intent against forbidden categories (harmful/illegal, unauthorized account modification, payment manipulation, prompt injection).
-   - Routes unsafe requests to refusal and escalation without continuing to answer generation.
-2. **Tier 2 - Evidence Verification & Decision**:
-   - Reviews retrieved policy chunks against the user prompt.
-   - Evaluates structured outputs:
-     - `policy_sufficient` (`true`/`false`)
-     - `confidence` (`0.0` to `1.0`)
-     - `needs_escalation` (`true`/`false`)
-     - `reasoning`
-   - If policy is ambiguous, routes directly to **Human Support Team Escalation**.
+### 4.3 Safety Gate and Guarded Tool Loop (implemented) + Evidence Verification (future)
+1. **Safety & Prohibited Request Check (implemented)**:
+   - Deterministic rules classify the query against forbidden categories (unauthorized account modification, payment manipulation, legal advice, prompt injection).
+   - Unsafe requests route straight to refusal and escalation; the LLM node is never reached, which is asserted in `tests/test_support_graph.py` and visible as a missing `agent` span in LangSmith.
+2. **Guarded tool loop (implemented)**:
+   - Tool calls go through `ToolRegistry`, which validates arguments and caps calls per turn; failures and loop-guard trips create escalation tickets.
+   - The `finalize` node labels each reply's grounding (`retrieval` / `tool_result` / `none`) and guarantees the reply names any ticket created.
+3. **LLM-based evidence verification (future work, not implemented)**:
+   - A structured check of retrieved chunks against the prompt (`policy_sufficient`, `confidence`, `needs_escalation`, `reasoning`) that escalates when policy is ambiguous.
+   - Motivation: real-model runs without retrieval fabricated policy (`docs/02_prompt_comparison.md`); retrieval fixed this, and a verification step would add a second line of defence.
 
 ### 4.4 Grounded Generation with Citations & Follow-Ups
 - **Grounding Constraint**: The LLM prompt is strictly bounded to the verified context block. No external knowledge or fabrication is permitted.
@@ -169,23 +168,24 @@ gantt
 - Use the existing ingestion script to read the policy corpus from `data/knowledge_base/`.
 - Embed chunks with the configured embedding backend and upload them to Qdrant with payload metadata.
 
-#### Phase 2: Agent Orchestration Layer (`src/capstone_agent/graph/`)
-- Define `AgentState` schema holding `user_message`, `sanitized_message`, `retrieved_chunks`, `verification_result`, and `escalation_context`.
-- Keep the current node structure aligned with the shipped runtime:
-  1. `pii_redact_node`
-  2. `safety_check_node`
-  3. `retrieval_node`
-  4. `evidence_verify_node`
-  5. `answer_generation_node`
-  6. `escalation_node`
+#### Phase 2: Agent Orchestration Layer (`src/capstone_agent/graph/`) — implemented
+- `SupportState` holds the input, the checkpointed fields (`history`, `last_order_id`), and per-turn fields (`retrieved`, `messages`, `tool_calls_made`, `ticket_id`, `trace`, ...).
+- Nodes in the shipped graph:
+  1. `redact_pii`
+  2. `safety_check`
+  3. `resolve_memory`
+  4. `plan_and_retrieve`
+  5. `agent` ⇄ `tools`
+  6. `escalate`
+  7. `finalize`
 
-#### Phase 3: Verification & Citation Formatting
-- Keep the structured evidence verification fields (`policy_sufficient`, `confidence`, `needs_escalation`).
-- Attach grounded citations and follow-up suggestion generation to the response payload.
+#### Phase 3: Verification & Citation Formatting — partly implemented
+- Implemented: source provenance, grounding label, and ticket-in-reply guarantee (`finalize`).
+- Future work: LLM-based structured evidence verification (`policy_sufficient`, `confidence`, `needs_escalation`) and follow-up suggestions.
 
-#### Phase 4: API Endpoint & Evaluation Update
-- Keep `deployment/app.py` aligned with the current graph/runtime wiring.
-- Run `evaluation/run_eval.py` to benchmark response accuracy, escalation handling, and latency against the baseline.
+#### Phase 4: API Endpoint & Evaluation Update — implemented
+- `deployment/app.py` serves the same graph via `FullAgent`; `/chat` returns the reply plus `escalated`, `ticket_id`, `sources`, `grounding`, and the node `path`.
+- `evaluation/run_eval.py` benchmarks the mock and a real model using the graph's structured result.
 
 ---
 

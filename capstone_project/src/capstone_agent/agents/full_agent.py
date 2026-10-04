@@ -1,31 +1,26 @@
 """Phase 6 & 7: planning, memory, and adaptive behaviour on top of ToolAgent.
 
 This is the production agent used for deployment (Phase 8) and evaluation (Phase 9).
+Its workflow is a LangGraph `StateGraph` (see `graph/app.py`); this class is a thin
+facade that wires the agent's components into the graph and runs one turn at a time.
 """
-import json
-import re
+from langgraph.checkpoint.memory import MemorySaver
 
 from ..feedback import FeedbackStore
-from ..logging_utils import get_logger, log_interaction, sanitize_user_message
+from ..graph.app import build_support_graph
+from ..logging_utils import sanitize_user_message
 from ..memory import ConversationMemory
-from ..safety import check as safety_check
-from ..tools import TOOL_REGISTRY, TOOL_SCHEMAS, ToolError
-from .tool_agent import DEFAULT_VARIANT, PROMPT_VARIANTS, ToolAgent
-
-logger = get_logger("full_agent")
-
-# Very small task-decomposition planner for a known multi-step request pattern:
-# "check status ... and tell me if I can return it" -> [status lookup, eligibility check]
-_MULTI_STEP_PATTERN = re.compile(r"status.*return|return.*status", re.IGNORECASE)
-_PRONOUN_REF_PATTERN = re.compile(r"\bit\b|\bthat order\b", re.IGNORECASE)
-_ORDER_ID_PATTERN = re.compile(r"ORD-\d{3,}")
+from .tool_agent import DEFAULT_VARIANT, ToolAgent
 
 
 class FullAgent(ToolAgent):
-    def __init__(self, variant: str = DEFAULT_VARIANT):
+    def __init__(self, variant: str = DEFAULT_VARIANT, use_checkpointer: bool = True):
         super().__init__(variant)
         self.feedback_store = FeedbackStore()
+        # Long-term (cross-session, non-PII) facts only; short-term history lives in the
+        # graph checkpoint, keyed by thread_id == session_id.
         self._memories: dict = {}
+        self.graph = build_support_graph(self, checkpointer=MemorySaver() if use_checkpointer else None)
 
     def _memory(self, session_id: str) -> ConversationMemory:
         if session_id not in self._memories:
@@ -33,98 +28,33 @@ class FullAgent(ToolAgent):
         return self._memories[session_id]
 
     @staticmethod
-    def _plan(message: str) -> list:
-        if _MULTI_STEP_PATTERN.search(message):
-            return ["get_order_status", "check_return_eligibility"]
-        return ["single_step"]
+    def thread_config(session_id: str) -> dict:
+        return {
+            "configurable": {"thread_id": session_id},
+            "recursion_limit": 25,
+            "run_name": "support_turn",
+            "tags": ["support-agent"],
+            "metadata": {"session_id": session_id},
+        }
+
+    def run_turn(self, session_id: str, message: str) -> dict:
+        """Run one conversation turn through the graph and return a structured result."""
+        # Sanitize at the boundary so raw PII never enters graph state or checkpoints.
+        state = self.graph.invoke(
+            {"session_id": session_id, "user_message": sanitize_user_message(message)},
+            self.thread_config(session_id),
+        )
+        return {
+            "reply": state.get("answer", ""),
+            "escalated": bool(state.get("escalated")),
+            "ticket_id": state.get("ticket_id") or None,
+            "sources": state.get("sources", []),
+            "grounding": state.get("grounding", ""),
+            "path": state.get("trace", []),
+        }
 
     def handle_message(self, session_id: str, message: str) -> str:
-        memory = self._memory(session_id)
-        safe_message = sanitize_user_message(message)
-        memory.add_turn("user", safe_message)
-        log_interaction(session_id, "user", safe_message)
-
-        decision = safety_check(safe_message)
-        if not decision.allowed:
-            if decision.escalate:
-                self.tool_registry.execute(
-                    "escalate_to_human", {"reason": safe_message[:120], "session_id": session_id}, 0
-                )
-            memory.add_turn("assistant", decision.reason)
-            log_interaction(session_id, "assistant", decision.reason, {"safety_block": True})
-            return decision.reason
-
-        # Memory: remember the last order ID mentioned, and resolve pronoun references
-        # ("that order" / "it") to it in later turns within the same session.
-        order_match = _ORDER_ID_PATTERN.search(safe_message)
-        if order_match:
-            memory.remember("last_order_id", order_match.group(0))
-        elif memory.recall("last_order_id") and _PRONOUN_REF_PATTERN.search(safe_message):
-            resolved = f"{safe_message} (referring to order {memory.recall('last_order_id')})"
-            memory.short_term[-1]["content"] = resolved
-            safe_message = resolved
-
-        # Adaptive behaviour: shift prompt strategy based on recent user feedback.
-        hints = self.feedback_store.preference_hints()
-        variant = "v3_role_constraints_concise" if hints.get("prefer_concise") else self.variant
-
-        plan = self._plan(safe_message)
-        system_prompt = PROMPT_VARIANTS[variant] + f"\n\nPLAN: {plan}"
-        results = self.kb.search(safe_message)
-        if results:
-            context = "\n\n".join(f"[{c.doc_id}] {c.text}" for _, c in results)
-            system_prompt += f"\n\nRETRIEVED CONTEXT:\n{context}"
-
-        messages = [{"role": "system", "content": system_prompt}, *memory.get_recent_context()]
-
-        call_count = 0
-        while True:
-            result = self.llm.chat(messages, tools=TOOL_SCHEMAS)
-            tool_calls = result.get("tool_calls")
-            if not tool_calls:
-                content = result["content"] or ""
-                # If retrieval provided context, append concise provenance to the reply
-                try:
-                    if results:
-                        doc_ids = [c.doc_id for _, c in results]
-                        unique_ids = sorted(set(doc_ids))
-                        if unique_ids:
-                            provenance = "\n\nSources: " + ", ".join(unique_ids)
-                            content = content + provenance
-                except Exception:
-                    # Best-effort provenance; do not fail the response if something goes wrong
-                    pass
-                memory.add_turn("assistant", content)
-                log_interaction(session_id, "assistant", content, {"plan": plan, "prompt_variant": variant})
-                return content
-
-            for call in tool_calls:
-                name = call["function"]["name"]
-                try:
-                    arguments = json.loads(call["function"]["arguments"])
-                except json.JSONDecodeError:
-                    arguments = {}
-                try:
-                    tool_result = self.tool_registry.execute(name, arguments, call_count)
-                except ToolError as exc:
-                    tool_result = TOOL_REGISTRY["escalate_to_human"](
-                        reason=f"{name}: {exc}",
-                        session_id=session_id,
-                    )
-                call_count += 1
-                messages.append({"role": "assistant", "content": None, "tool_calls": [call]})
-                messages.append({"role": "tool", "name": name, "content": json.dumps(tool_result)})
-
-            if call_count >= self.tool_registry.max_calls_per_turn:
-                tool_result = TOOL_REGISTRY["escalate_to_human"](
-                    reason="tool loop guard reached",
-                    session_id=session_id,
-                )
-                fallback = "I'm having trouble resolving this automatically. I've escalated it to a human agent."
-                messages.append({"role": "tool", "name": "escalate_to_human", "content": json.dumps(tool_result)})
-                memory.add_turn("assistant", fallback)
-                log_interaction(session_id, "assistant", fallback, {"loop_guard": True})
-                return fallback
+        return self.run_turn(session_id, message)["reply"]
 
     def record_feedback(self, session_id: str, rating: int, comment: str = "") -> None:
         self.feedback_store.add(session_id, rating, comment)

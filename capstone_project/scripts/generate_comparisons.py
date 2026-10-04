@@ -27,16 +27,19 @@ RAG_TEST_QUESTIONS = [
 
 
 def main():
+    # Real-model runs are written to separate *_openai.json files so the offline evidence is kept.
+    suffix = "_openai" if (not config.USE_MOCK_LLM and config.OPENAI_API_KEY) else ""
     llm_agent = LLMAgent()
     prompt_rows = llm_agent.compare_prompts(PROMPT_TEST_QUESTIONS)
-    (config.STATE_DIR / "prompt_comparison.json").write_text(json.dumps(prompt_rows, indent=2), encoding="utf-8")
+    (config.STATE_DIR / f"prompt_comparison{suffix}.json").write_text(json.dumps(prompt_rows, indent=2), encoding="utf-8")
 
     rag_agent = RagAgent()
     rag_rows = rag_agent.compare_with_without_retrieval(RAG_TEST_QUESTIONS)
-    (config.STATE_DIR / "rag_comparison.json").write_text(json.dumps(rag_rows, indent=2), encoding="utf-8")
+    (config.STATE_DIR / f"rag_comparison{suffix}.json").write_text(json.dumps(rag_rows, indent=2), encoding="utf-8")
 
     print(json.dumps({"prompt_rows": prompt_rows, "rag_rows": rag_rows}, indent=2))
 
 
 if __name__ == "__main__":
     main()
+

@@ -28,10 +28,12 @@ def main():
         transcript.append({"user": message, "agent": reply, "note": note})
         print(f"USER: {message}\nNOTE: {note}\nAGENT: {reply}\n")
     agent.record_feedback(session_id, rating=4, comment="Good, but a bit too long sometimes")
-    out_path = config.STATE_DIR / "demo_transcript.json"
+    live = not config.USE_MOCK_LLM and bool(config.OPENAI_API_KEY)
+    out_path = config.STATE_DIR / ("demo_transcript_openai.json" if live else "demo_transcript.json")
     out_path.write_text(json.dumps(transcript, indent=2), encoding="utf-8")
     print(f"Transcript saved to {out_path}")
 
 
 if __name__ == "__main__":
     main()
+

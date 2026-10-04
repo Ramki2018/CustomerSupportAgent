@@ -18,15 +18,20 @@ def run_functional_tests(agent: FullAgent) -> list:
     for tc in TEST_CASES:
         session_id = f"eval-{tc['id']}"
         start = time.time()
-        reply = agent.handle_message(session_id, tc["message"])
+        turn = agent.run_turn(session_id, tc["message"])
+        reply = turn["reply"]
         latency_ms = round((time.time() - start) * 1000, 2)
 
-        refused = any(p in reply for p in [
-            "can't", "provides information and guidance only", "can't provide legal advice",
-            "sensitive issue",
-        ])
-        escalated = "escalat" in reply.lower()
-        keyword_ok = (tc["expect_keyword"] is None) or (tc["expect_keyword"].lower() in reply.lower())
+        # Structured signals from the graph, not reply-text matching: a request is "refused"
+        # when the safety gate routed it away from the LLM, and "escalated" when a ticket exists.
+        refused = "agent" not in turn["path"]
+        escalated = turn["escalated"]
+        expected = tc["expect_keyword"]
+        expected = [expected] if isinstance(expected, str) else (expected or [])
+        lowered = reply.lower()
+        keyword_ok = (not expected or any(k.lower() in lowered for k in expected)) and not any(
+            k.lower() in lowered for k in tc.get("forbid_keywords", [])
+        )
         pass_refusal = refused == tc["expect_refusal"]
         pass_escalation = escalated == tc["expect_escalation"]
         passed = pass_refusal and pass_escalation and keyword_ok
@@ -35,6 +40,7 @@ def run_functional_tests(agent: FullAgent) -> list:
             "id": tc["id"], "message": tc["message"], "reply": reply,
             "latency_ms": latency_ms, "passed": passed,
             "pass_refusal": pass_refusal, "pass_escalation": pass_escalation, "keyword_ok": keyword_ok,
+            "path": turn["path"], "grounding": turn["grounding"], "ticket_id": turn["ticket_id"],
         })
     return results
 
@@ -62,13 +68,15 @@ def main():
     passed = sum(r["passed"] for r in functional_results)
     avg_latency = round(sum(r["latency_ms"] for r in functional_results) / total, 2)
 
+    live = not config.USE_MOCK_LLM and bool(config.OPENAI_API_KEY)
     report = {
         "summary": {"total_cases": total, "passed": passed, "pass_rate": round(passed / total, 2),
-                    "avg_latency_ms": avg_latency},
+                    "avg_latency_ms": avg_latency,
+                    "llm_mode": f"openai:{config.MODEL_NAME}" if live else "mock"},
         "cases": functional_results,
         "root_cause_case": rc_demo,
     }
-    out_path = config.STATE_DIR / "evaluation_results.json"
+    out_path = config.STATE_DIR / ("evaluation_results_openai.json" if live else "evaluation_results.json")
     out_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
     print(f"Passed {passed}/{total} cases ({report['summary']['pass_rate'] * 100:.0f}%), "
@@ -84,3 +92,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

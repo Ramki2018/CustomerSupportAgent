@@ -1,0 +1,7 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "support_agent": "./src/capstone_agent/graph/entrypoint.py:graph"
+  },
+  "env": ".env"
+}
