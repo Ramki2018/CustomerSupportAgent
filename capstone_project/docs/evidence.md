@@ -19,8 +19,10 @@ workflow (`src/capstone_agent/graph/`), built by `FullAgent`:
 
 ```
 redact_pii → safety_check ─(unsafe)→ escalate → END
-                  └(safe)→ resolve_memory → plan_and_retrieve → agent ⇄ tools → finalize → END
-                                                                       └(loop guard)→ escalate
+                  └(safe)→ resolve_memory → supervisor ─(policy)→ policy_agent ─→ finalize → END
+                                                │                  (mixed: continues to order_agent)
+                                                └(order)→ order_agent ⇄ tools → finalize → END
+                                                                          └(call limit)→ escalate
 ```
 
 Every response carries the `path` it took, so the evidence below is directly inspectable.
@@ -29,15 +31,16 @@ Every response carries the `path` it took, so the evidence below is directly ins
 
 | # | Question | Path | Grounding | Escalated | Result |
 |---|---|---|---|---|---|
-| 1 | What is your return policy? | redact_pii › safety_check › resolve_memory › plan_and_retrieve › agent › finalize | retrieval (`faq`, `return_policy`) | No | 30-day window, refund to original payment method |
+| 1 | What is your return policy? | … supervisor › policy_agent › finalize | retrieval (`faq`, `return_policy`) | No | 30-day window, refund to original payment method |
 | 2 | How long does shipping usually take? | same as #1 | retrieval (incl. `shipping_policy`) | No | "3-5 business days", express 1-2 days |
-| 3 | Is order ORD-1002 eligible for a return? | … agent › **tools** › agent › finalize | tool_result | No | Eligible, within the 30-day window |
-| 4 | Can you check the status of that order and tell me if I can return it? | … agent › **tools** › agent › finalize | tool_result | No | "that order" resolved to ORD-1002 via checkpointed memory; status + eligibility (15 days elapsed) |
-| 5 | Please process a refund for me right now. | redact_pii › safety_check › **escalate** | none | **Yes** (`ESC-52081`) | Refused; **no `agent` node, so the LLM was never called** |
+| 3 | Is order ORD-1002 eligible for a return? | … supervisor › order_agent › **tools** › order_agent › finalize | tool_result | No | Eligible, within the 30-day window |
+| 4 | Can you check the status of that order and tell me if I can return it? | … supervisor › order_agent › **tools** › order_agent › finalize | tool_result | No | "that order" resolved to ORD-1002 via checkpointed memory; status + eligibility (15 days elapsed) |
+| 5 | Please process a refund for me right now. | redact_pii › safety_check › **escalate** | none | **Yes** (`ESC-95607`) | Refused; **neither specialist agent ran, so the LLM was never called** |
+| 6 | What is your return policy for order ORD-1002? *(mixed)* | … supervisor › policy_agent › order_agent › tools › order_agent › finalize | tool_result + retrieval | No | Both specialists answered; replies merged (order eligibility + policy text + sources) |
 
 The same five questions also passed with the offline mock (see below). With LangSmith
 tracing enabled (`LANGSMITH_TRACING=true`), each turn appears as a `support_turn` run with
-one span per node; the refusal run has no `agent` span.
+one span per node; the refusal run has neither a `policy_agent` nor an `order_agent` span.
 
 ## Results (offline `MockLLM` run)
 
@@ -69,7 +72,7 @@ one span per node; the refusal run has no `agent` span.
 ## Escalation Evidence
 
 During question 5, the agent created an explicit escalation record (offline run `ESC-75165`;
-live real-model API run `ESC-52081`):
+live real-model API run `ESC-95607`):
 
 - Ticket ID: `ESC-75165`
 - Reason: refund / money-moving request

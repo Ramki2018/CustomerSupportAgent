@@ -102,6 +102,7 @@ def chat(req: ChatRequest):
             "ticket_id": result["ticket_id"],
             "sources": result["sources"],
             "grounding": result["grounding"],
+            "route": result["route"],
             "path": result["path"],
         }
     except Exception as exc:

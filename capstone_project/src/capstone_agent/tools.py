@@ -103,18 +103,26 @@ TOOL_SCHEMAS = [
     },
 ]
 
+# Per-agent tool permissions. The policy agent gets no tools; the order agent gets the
+# order tools plus the escalation hand-off. Enforced by ToolRegistry.execute(allowed=...).
+ORDER_AGENT_TOOLS = frozenset({"get_order_status", "check_return_eligibility", "escalate_to_human"})
+ORDER_AGENT_TOOL_SCHEMAS = [s for s in TOOL_SCHEMAS if s["function"]["name"] in ORDER_AGENT_TOOLS]
+
 
 class ToolRegistry:
-    """Executes tool calls with loop-prevention and argument-validation safeguards."""
+    """Executes tool calls with loop-prevention, argument-validation, and permission safeguards."""
 
     def __init__(self, max_calls_per_turn: int = config.MAX_TOOL_CALLS_PER_TURN):
         self.max_calls_per_turn = max_calls_per_turn
 
-    def execute(self, name: str, arguments: dict, call_count: int) -> dict:
+    def execute(self, name: str, arguments: dict, call_count: int, allowed: frozenset | set | None = None) -> dict:
+        """Run a tool. `allowed` is the calling agent's allow-list; None means unrestricted."""
         if call_count >= self.max_calls_per_turn:
             raise ToolError(f"Tool call limit ({self.max_calls_per_turn}) reached for this turn; escalating instead.")
         if name not in TOOL_REGISTRY:
             raise ToolError(f"Unknown tool '{name}'.")
+        if allowed is not None and name not in allowed:
+            raise ToolError(f"Tool '{name}' is not permitted for this agent.")
         try:
             return TOOL_REGISTRY[name](**arguments)
         except TypeError as exc:

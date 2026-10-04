@@ -1,9 +1,11 @@
 # Component Architecture
 
-The system is **one agent** implemented as **one LangGraph workflow**. Components are plain
-Python modules that the graph nodes call. The `agents/` folder is a class chain
-(`LLMAgent -> RagAgent -> ToolAgent -> FullAgent`) showing how the system was built up in
-phases; it is not a set of communicating agents.
+The system is a **small multi-agent design inside one LangGraph workflow**: a deterministic
+**supervisor** hands each request to a **policy agent** (retrieval + LLM, no tools), an
+**order agent** (LLM + order tools, no policy documents), or both. Agents never call each
+other; they communicate only through shared graph state. Components are plain Python modules
+that the graph nodes call. (The `agents/` folder is a separate class chain
+`LLMAgent -> RagAgent -> ToolAgent -> FullAgent` showing how the system was built in phases.)
 
 ## 1. Component view
 
@@ -15,19 +17,21 @@ flowchart LR
         API["FastAPI<br/>/chat  /feedback  /health<br/>input validation, request lock"]
     end
 
-    subgraph ORCH["Orchestration - one agent, one workflow"]
+    subgraph ORCH["Orchestration - LangGraph StateGraph (graph/app.py)"]
         FA["FullAgent facade<br/>agents/full_agent.py"]
-        subgraph G["LangGraph StateGraph - graph/app.py"]
-            N1["redact_pii"] --> N2{"safety_check"}
-            N2 -- "unsafe" --> NE["escalate"]
-            N2 -- "safe" --> N3["resolve_memory"]
-            N3 --> N4["plan_and_retrieve"]
-            N4 --> N5["agent"]
-            N5 -- "tool calls" --> N6["tools"]
-            N6 -- "continue" --> N5
-            N6 -- "call limit" --> NE
-            N5 -- "final reply" --> N7["finalize"]
-        end
+        N1["redact_pii"] --> N2{"safety_check"}
+        N2 -- "unsafe" --> NE["escalate"]
+        N2 -- "safe" --> N3["resolve_memory"]
+        N3 --> SUP{"supervisor<br/>deterministic router"}
+        SUP -- "policy / mixed" --> PA["policy_agent<br/>retrieval + LLM<br/>NO tools"]
+        SUP -- "order" --> OA["order_agent<br/>LLM + order tools<br/>NO documents"]
+        PA -- "mixed" --> OA
+        PA -- "tool call attempted" --> NE
+        PA -- "policy reply" --> N7["finalize"]
+        OA -- "tool calls" --> N6["tools<br/>allow-listed, capped"]
+        N6 -- "continue" --> OA
+        N6 -- "call limit" --> NE
+        OA -- "reply" --> N7
     end
 
     subgraph COMP["Components - plain Python"]
@@ -50,87 +54,103 @@ flowchart LR
     end
 
     API --> FA --> N1
-    N7 -->|"JSON reply + path"| API
+    N7 -->|"JSON reply + route + path"| API
     NE -->|"refusal + ticket"| API
 
     N1 -.-> PII
     N2 -.-> SAF
     N3 -.-> MEM
     N3 -.-> CP
-    N4 -.-> RET
-    N4 -.-> FB
-    N5 -.-> LLM
+    SUP -.-> FB
+    PA -.-> RET
+    PA -.-> LLM
+    OA -.-> LLM
     N6 -.-> TR
     NE -.-> TR
     N7 -.-> CP
     RET -.-> QD
     MEM -.-> LT
     FB -.-> FJ
-    G -.-> LOG
-    G -.-> LS
+    ORCH -.-> LOG
+    ORCH -.-> LS
     API -->|"POST /feedback"| FB
 ```
 
-## 2. How the pieces communicate in one turn
+## 2. How the agents communicate
+
+```mermaid
+flowchart LR
+    ST[("Shared graph state<br/>route, plan, history,<br/>answer, policy_answer,<br/>sources, tool results, ticket")]
+    SUP["Supervisor"] -->|"writes route, plan"| ST
+    ST -->|"reads route"| PA["Policy agent"]
+    ST -->|"reads route, plan"| OA["Order agent"]
+    PA -->|"writes policy_answer, sources"| ST
+    OA -->|"writes answer, tool results"| ST
+    ST --> FIN["finalize<br/>merges answers"]
+```
+
+| Request | `route` | Path through the graph |
+|---|---|---|
+| "What is your return policy?" | policy | supervisor, policy_agent, finalize |
+| "Is order ORD-1002 eligible for a return?" | order | supervisor, order_agent, tools, order_agent, finalize |
+| "What is your return policy for order ORD-1002?" | both | supervisor, policy_agent, order_agent, tools, order_agent, finalize (answers merged) |
+| "Please process a refund for me right now." | none | safety_check, escalate (no agent runs) |
+
+## 3. One turn in sequence
 
 ```mermaid
 sequenceDiagram
     actor C as Customer
     participant API as FastAPI /chat
-    participant FA as FullAgent
-    participant G as Graph nodes
+    participant G as Graph
     participant S as safety.py
-    participant M as Memory
+    participant SUP as Supervisor
+    participant PA as Policy agent
+    participant OA as Order agent
     participant R as Retrieval
     participant L as LLM
     participant T as ToolRegistry
 
     C->>API: message + session_id
-    API->>FA: run_turn()
-    FA->>G: invoke(thread_id = session_id)
-    G->>G: redact_pii
+    API->>G: run_turn (thread_id = session_id)
+    G->>G: redact_pii, resolve_memory
     G->>S: safety_check
     alt unsafe request
         G->>T: escalate_to_human
-        T-->>G: ticket
-        G-->>API: refusal + ticket (LLM never called)
+        G-->>API: refusal + ticket (no agent, no LLM)
     else safe request
-        G->>M: recall last_order_id
-        G->>R: search policy text
-        R-->>G: top chunks
-        G->>L: prompt + chunks + tool schemas
-        loop until reply or call limit
-            L-->>G: tool call
-            G->>T: execute (validated, capped)
-            T-->>G: result, or ToolError -> ticket
-            G->>L: tool result
+        G->>SUP: route (order ID? policy words?)
+        opt policy or mixed
+            SUP->>PA: handle
+            PA->>R: search policy text
+            R-->>PA: top chunks
+            PA->>L: prompt + chunks (no tools)
+            L-->>PA: policy answer
         end
-        L-->>G: final reply
-        G->>G: finalize (sources, grounding, ticket)
-        G-->>API: reply + path
+        opt order or mixed
+            SUP->>OA: handle
+            OA->>L: prompt + order tool schemas
+            loop until reply or call limit
+                L-->>OA: tool call
+                OA->>T: execute (allow-listed, capped)
+                T-->>OA: result, or ToolError -> ticket
+                OA->>L: tool result
+            end
+            L-->>OA: order answer
+        end
+        G->>G: finalize (merge, sources, grounding, ticket)
+        G-->>API: reply + route + path
     end
     API-->>C: JSON response
 ```
 
-## 3. Not implemented: what a multi-agent version would look like
+## 4. Why this shape
 
-Shown for comparison only. The current single-agent design is deliberate: the safety gate is
-structural and one workflow is easier to test and explain.
-
-```mermaid
-flowchart LR
-    U["Customer"] --> SG["Safety gate<br/>deterministic, runs first"]
-    SG --> SUP["Supervisor agent<br/>routes the request"]
-    SUP --> POL["Policy agent<br/>retrieval only"]
-    SUP --> ORD["Order agent<br/>order tools only"]
-    SUP --> ESC["Escalation agent<br/>tickets, human handoff"]
-    POL --> SUP
-    ORD --> SUP
-    ESC --> SUP
-    SUP --> U
-```
-
-Reasons to adopt it later: separate prompts and permissions per specialist (the order agent
-never sees policy text), independent evaluation, and independent scaling. Costs: more LLM
-calls per turn (latency and cost), more failure modes (routing mistakes, agents disagreeing),
-and a harder safety argument.
+- **Least privilege.** The policy agent cannot call tools or see orders; the order agent cannot see
+  policy documents. `ToolRegistry.execute(..., allowed=...)` enforces this in code, and a tool call
+  from the policy agent escalates to a human.
+- **Deterministic supervisor.** Two rules, no LLM call, unit-tested. An LLM router would add latency,
+  cost and a misrouting failure mode to the safety-relevant path.
+- **Cost.** Single-domain turns use one LLM call. Mixed turns use two.
+- **Limit.** Routing keys on an order ID, so an order question with no ID goes to the policy agent,
+  which will say it has no documentation and offer a human.

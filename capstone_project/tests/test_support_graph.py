@@ -9,7 +9,14 @@ from capstone_agent import config
 from capstone_agent.agents.full_agent import FullAgent
 from capstone_agent.graph.nodes import LOOP_GUARD_REPLY
 from capstone_agent.llm_client import MockLLM
-from capstone_agent.graph.routing import route_after_agent, route_after_safety, route_after_tools
+from capstone_agent.graph.routing import (
+    route_after_order_agent,
+    route_after_policy_agent,
+    route_after_safety,
+    route_after_tools,
+    route_to_specialist,
+)
+from capstone_agent.tools import ORDER_AGENT_TOOLS, ToolError, ToolRegistry
 
 
 @pytest.fixture
@@ -36,10 +43,16 @@ class AlwaysToolCallLLM:
 def test_routing_functions_are_pure_and_deterministic():
     assert route_after_safety({"is_safe": False}) == "escalate"
     assert route_after_safety({"is_safe": True}) == "resolve_memory"
-    assert route_after_agent({"pending_tool_calls": [{"x": 1}]}) == "tools"
-    assert route_after_agent({"pending_tool_calls": []}) == "finalize"
+    assert route_to_specialist({"route": "order"}) == "order_agent"
+    assert route_to_specialist({"route": "policy"}) == "policy_agent"
+    assert route_to_specialist({"route": "both"}) == "policy_agent"
+    assert route_after_policy_agent({"needs_ticket": True, "route": "both"}) == "escalate"
+    assert route_after_policy_agent({"route": "both"}) == "order_agent"
+    assert route_after_policy_agent({"route": "policy"}) == "finalize"
+    assert route_after_order_agent({"pending_tool_calls": [{"x": 1}]}) == "tools"
+    assert route_after_order_agent({"pending_tool_calls": []}) == "finalize"
     assert route_after_tools({"needs_ticket": True}) == "escalate"
-    assert route_after_tools({"needs_ticket": False}) == "agent"
+    assert route_after_tools({"needs_ticket": False}) == "order_agent"
 
 
 def test_refusal_never_reaches_llm_and_creates_ticket(agent):
@@ -52,22 +65,148 @@ def test_refusal_never_reaches_llm_and_creates_ticket(agent):
     assert "can't modify orders" in result["reply"]
 
 
-def test_faq_turn_is_grounded_in_retrieval(agent):
+def test_faq_turn_goes_to_policy_agent_and_is_grounded(agent):
     result = agent.run_turn("graph-faq", "What is your return policy?")
 
-    assert result["path"] == ["redact_pii", "safety_check", "resolve_memory", "plan_and_retrieve", "agent", "finalize"]
+    assert result["route"] == "policy"
+    assert result["path"] == ["redact_pii", "safety_check", "resolve_memory", "supervisor", "policy_agent", "finalize"]
     assert result["grounding"] == "retrieval"
     assert "return_policy" in result["sources"]
     assert result["escalated"] is False
 
 
-def test_tool_turn_uses_tool_result(agent):
+def test_tool_turn_goes_to_order_agent_and_uses_tool_result(agent):
     result = agent.run_turn("graph-tool", "Is order ORD-1002 eligible for a return?")
 
-    assert "tools" in result["path"]
+    assert result["route"] == "order"
+    assert result["path"] == [
+        "redact_pii", "safety_check", "resolve_memory", "supervisor",
+        "order_agent", "tools", "order_agent", "finalize",
+    ]
     assert result["grounding"] == "tool_result"
     assert result["sources"] == []
     assert "eligible" in result["reply"].lower()
+
+
+def test_policy_agent_has_no_tools(agent):
+    seen = {}
+
+    class RecordingLLM:
+        def chat(self, messages, tools=None):
+            seen["tools"] = tools
+            return {"role": "assistant", "content": "ok", "tool_calls": None}
+
+    agent.llm = RecordingLLM()
+    agent.run_turn("graph-policy-tools", "What is your return policy?")
+
+    assert seen["tools"] is None
+
+
+def test_order_agent_sees_no_policy_documents(agent):
+    seen = {}
+
+    def exploding_search(query, top_k=None):
+        raise AssertionError("order agent must not retrieve policy documents")
+
+    class RecordingLLM:
+        def chat(self, messages, tools=None):
+            seen["system"] = messages[0]["content"]
+            seen["tools"] = [t["function"]["name"] for t in tools]
+            return {"role": "assistant", "content": "ok", "tool_calls": None}
+
+    agent.kb.search = exploding_search
+    agent.llm = RecordingLLM()
+    agent.run_turn("graph-order-docs", "What is the status of order ORD-1002?")
+
+    assert "RETRIEVED CONTEXT" not in seen["system"]
+    assert set(seen["tools"]) == set(ORDER_AGENT_TOOLS)
+
+
+def test_supervisor_routes_resolved_pronoun_to_order_agent(agent):
+    session = "graph-route-pronoun"
+    agent.run_turn(session, "What is the status of order ORD-1002?")
+    follow_up = agent.run_turn(session, "Can I return it?")
+    unrelated = agent.run_turn(session, "How long does shipping usually take?")
+
+    assert follow_up["route"] == "order"
+    assert unrelated["route"] == "policy"
+
+
+def test_mixed_request_runs_both_agents_and_merges_their_answers(agent):
+    result = agent.run_turn("graph-both", "What is your return policy for order ORD-1002?")
+
+    assert result["route"] == "both"
+    assert result["path"] == [
+        "redact_pii", "safety_check", "resolve_memory", "supervisor",
+        "policy_agent", "order_agent", "tools", "order_agent", "finalize",
+    ]
+    assert result["grounding"] == "tool_result+retrieval"
+    assert "eligible" in result["reply"].lower()          # order agent's part
+    assert "policy documentation" in result["reply"]      # policy agent's part
+    assert "return_policy" in result["sources"]
+
+
+def test_model_written_sources_line_is_replaced_not_duplicated(agent):
+    class ChattySourcesLLM:
+        def chat(self, messages, tools=None):
+            return {"role": "assistant", "content": "Standard shipping takes 3-5 days.\n\nSources: shipping_policy",
+                    "tool_calls": None}
+
+    agent.llm = ChattySourcesLLM()
+    reply = agent.run_turn("graph-sources", "How long does shipping usually take?")["reply"]
+
+    assert reply.count("Sources:") == 1
+    assert reply.startswith("Standard shipping takes 3-5 days.")
+
+
+def test_tool_registry_enforces_agent_permissions():
+    registry = ToolRegistry()
+    assert registry.execute("get_order_status", {"order_id": "ORD-1002"}, 0, allowed=ORDER_AGENT_TOOLS)["order_id"] == "ORD-1002"
+    with pytest.raises(ToolError, match="not permitted"):
+        registry.execute("get_order_status", {"order_id": "ORD-1002"}, 0, allowed=frozenset())
+
+
+def test_escalation_is_idempotent_within_a_turn(agent):
+    """A real model may call escalate_to_human after a tool failure already created a ticket."""
+
+    class EscalatingLLM:
+        def __init__(self):
+            self.calls = 0
+
+        def chat(self, messages, tools=None):
+            self.calls += 1
+            if self.calls == 1:
+                args = '{"order_id": "ORD-9999"}'
+                name = "get_order_status"
+            elif self.calls == 2:
+                args = '{"reason": "customer asked", "session_id": "graph-idem"}'
+                name = "escalate_to_human"
+            else:
+                return {"role": "assistant", "content": "Handed off.", "tool_calls": None}
+            call = {"id": f"call-{self.calls}", "type": "function", "function": {"name": name, "arguments": args}}
+            return {"role": "assistant", "content": None, "tool_calls": [call]}
+
+    agent.llm = EscalatingLLM()
+    result = agent.run_turn("graph-idem", "What is the status of order ORD-9999?")
+
+    tickets = {m.group(0) for m in __import__("re").finditer(r"ESC-\d{5}", result["reply"])}
+    assert result["escalated"] is True
+    assert tickets == {result["ticket_id"]}
+
+
+def test_policy_agent_tool_call_is_a_violation_that_escalates(agent):
+    class RogueLLM:
+        def chat(self, messages, tools=None):
+            call = {"id": "call-1", "type": "function",
+                    "function": {"name": "get_order_status", "arguments": '{"order_id": "ORD-1002"}'}}
+            return {"role": "assistant", "content": None, "tool_calls": [call]}
+
+    agent.llm = RogueLLM()
+    result = agent.run_turn("graph-rogue", "What is your return policy?")
+
+    assert result["path"][-2:] == ["policy_agent", "escalate"]
+    assert result["escalated"] is True
+    assert result["ticket_id"].startswith("ESC-")
 
 
 def test_reply_always_mentions_the_ticket_it_created(agent):

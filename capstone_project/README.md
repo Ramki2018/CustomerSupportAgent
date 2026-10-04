@@ -3,12 +3,16 @@
 An AI agent for **Scenario 3: Customer Support (AI Support Resolution Agent)**, designed
 to run fully offline/reproducibly for grading, with an optional real-LLM mode.
 
-The workflow is a **LangGraph `StateGraph`** (redact PII → safety gate → memory → plan &
-retrieve → agent ⇄ tools → finalize / escalate). Every safety, tool, retrieval, and
-memory rule is plain, unit-tested Python inside a graph node; the LLM is only reachable
-through the `agent` node, after the safety gate. LangGraph provides orchestration,
-per-session checkpointed memory, and node-level **LangSmith tracing**. The API, demo,
-evaluation, CLI, and LangGraph deployment all run this same graph.
+The workflow is a **LangGraph `StateGraph`** with a small multi-agent design: a deterministic
+**supervisor** routes each request to a **policy agent** (retrieval + LLM, no tools, no order
+access) or an **order agent** (LLM + order tools, no policy documents), or to both for mixed
+questions and merges their answers. Redact PII → safety gate → memory → supervisor →
+specialist(s) → finalize / escalate. Every safety, routing, tool-permission, and memory rule
+is plain, unit-tested Python inside a graph node; the LLM is only reachable through a
+specialist agent, after the safety gate. Agents communicate only through shared graph state.
+LangGraph provides orchestration, per-session checkpointed memory, and node-level
+**LangSmith tracing**. The API, demo, evaluation, CLI, and LangGraph deployment all run this
+same graph.
 
 > Justification for the framework choice, architecture, and tradeoffs:
 > [docs/04_engineering_justification.md](docs/04_engineering_justification.md)
@@ -126,8 +130,8 @@ LANGSMITH_PROJECT=customer-support-agent
 ```
 
 (The legacy `LANGCHAIN_API_KEY` / `LANGCHAIN_TRACING_V2` names also work.) Each turn is a
-`support_turn` run with one span per node. A refused request shows no `agent` span,
-which is visible proof the LLM was never called. Only PII-sanitized text is sent, but
+`support_turn` run with one span per node. A refused request shows no `policy_agent` or
+`order_agent` span, which is visible proof the LLM was never called. Only PII-sanitized text is sent, but
 traces do leave your machine, so keep tracing off for real customer data unless your
 data policy allows it.
 
@@ -157,10 +161,13 @@ Notes:
 - **Redact PII before model-facing steps** → `logging_utils.sanitize_user_message`, applied
   at the API/agent boundary and again in the `redact_pii` node, before memory, retrieval,
   checkpoints, and LLM calls.
-- **Never fabricate policy** → `retrieval.py` + the `plan_and_retrieve` node; if nothing
+- **Never fabricate policy** → `retrieval.py` + the `policy_agent` node; if nothing
   relevant is found, the agent says so instead of guessing (verified in
   `evaluation/test_cases.py`, case TC7). Real-model evidence in
   `docs/02_prompt_comparison.md` shows why prompt wording alone is not enough.
+- **Least-privilege agents** → the policy agent is given no tools, and the order agent no
+  policy documents. `ToolRegistry.execute(..., allowed=...)` rejects any tool outside an
+  agent's allow-list, and a tool call from the policy agent escalates to a human.
 - **Escalate sensitive/unresolved cases** → `tools.py:tool_escalate_to_human`, invoked by the
   `escalate` node on every safety refusal and loop-guard trip, and by the `tools` node on
   every tool failure. The final reply always mentions the ticket that was created.

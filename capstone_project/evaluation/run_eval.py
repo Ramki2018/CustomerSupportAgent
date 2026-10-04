@@ -23,8 +23,8 @@ def run_functional_tests(agent: FullAgent) -> list:
         latency_ms = round((time.time() - start) * 1000, 2)
 
         # Structured signals from the graph, not reply-text matching: a request is "refused"
-        # when the safety gate routed it away from the LLM, and "escalated" when a ticket exists.
-        refused = "agent" not in turn["path"]
+        # when the safety gate routed it away from every LLM-backed agent, and "escalated" when a ticket exists.
+        refused = not any(n in turn["path"] for n in ("policy_agent", "order_agent"))
         escalated = turn["escalated"]
         expected = tc["expect_keyword"]
         expected = [expected] if isinstance(expected, str) else (expected or [])
@@ -40,7 +40,7 @@ def run_functional_tests(agent: FullAgent) -> list:
             "id": tc["id"], "message": tc["message"], "reply": reply,
             "latency_ms": latency_ms, "passed": passed,
             "pass_refusal": pass_refusal, "pass_escalation": pass_escalation, "keyword_ok": keyword_ok,
-            "path": turn["path"], "grounding": turn["grounding"], "ticket_id": turn["ticket_id"],
+            "path": turn["path"], "grounding": turn["grounding"],             "ticket_id": turn["ticket_id"], "route": turn["route"],
         })
     return results
 

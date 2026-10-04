@@ -18,7 +18,7 @@ The architecture directly addresses the main limitations of the original prototy
 
 | Dimension | Current Architecture (`capstone_project`) | Proposed Architecture (Target Blueprint) | Upgrade Impact & Benefit |
 | :--- | :--- | :--- | :--- |
-| **Workflow Orchestration** | LangGraph `StateGraph` in [`graph/app.py`](../src/capstone_agent/graph/app.py), built by [`full_agent.py`](../src/capstone_agent/agents/full_agent.py): PII redaction, safety gate, memory, plan & retrieve, agent ⇄ tools loop, escalation, finalize | Same graph hosted on LangGraph Platform with a durable checkpointer | Explicit, traceable control flow; the LLM node is structurally unreachable for refused requests. |
+| **Workflow Orchestration** | LangGraph `StateGraph` in [`graph/app.py`](../src/capstone_agent/graph/app.py), built by [`full_agent.py`](../src/capstone_agent/agents/full_agent.py): PII redaction, safety gate, memory, deterministic supervisor, policy agent and order agent (guarded tool loop), escalation, finalize | Same graph hosted on LangGraph Platform with a durable checkpointer | Explicit, traceable control flow; no LLM-backed agent is reachable for refused requests; least-privilege agents. |
 | **Knowledge Base & Ingestion** | Markdown policy files in `data/knowledge_base/` read directly at startup | Qdrant-backed retrieval over the same policy corpus, with a TF-IDF fallback for offline/demo use | Improves grounding while keeping the project runnable without Docker. |
 | **Vector DB & Retrieval** | TF-IDF cosine similarity in [`retrieval.py`](../src/capstone_agent/retrieval.py) | Semantic Qdrant search with sentence-transformer embeddings and deterministic policy-type boosting | Fixes the earlier shipping-policy recall gap while preserving reproducibility. |
 | **Privacy & PII Protection** | PII redacted before memory/retrieval/LLM calls, with sanitized logs on write | Pre-processing PII redaction plus explicit no-PII escalation payloads | Privacy-by-design: keeps sensitive values out of model-facing and escalation paths. |
@@ -54,8 +54,8 @@ flowchart TD
     subgraph LangGraph_Workflow ["4. LangGraph Agent Workflow Engine (implemented: graph/app.py)"]
         Node1["redact_pii\nMasks Name, Email, Phone, Address, Account ID; resets per-turn state"]:::graphNode
         Node2{"safety_check\n(Deterministic rules)"}:::graphNode
-        Node3["resolve_memory + plan_and_retrieve\nOrder ID / pronoun memory, feedback-adapted prompt,\nQdrant semantic search + TF-IDF fallback"]:::graphNode
-        Node4{"agent ⇄ tools loop\nMockLLM or OpenAI; validated, loop-guarded tools"}:::graphNode
+        Node3["resolve_memory + supervisor\nOrder ID / pronoun memory, deterministic routing,\nfeedback-adapted prompt"]:::graphNode
+        Node4{"policy_agent (Qdrant semantic search + TF-IDF fallback, no tools)\norder_agent ⇄ tools (validated, allow-listed, loop-guarded)"}:::graphNode
         Node5["finalize\nSources, grounding label, ticket named in reply"]:::graphNode
     end
 
@@ -112,7 +112,7 @@ flowchart TD
 ### 4.3 Safety Gate and Guarded Tool Loop (implemented) + Evidence Verification (future)
 1. **Safety & Prohibited Request Check (implemented)**:
    - Deterministic rules classify the query against forbidden categories (unauthorized account modification, payment manipulation, legal advice, prompt injection).
-   - Unsafe requests route straight to refusal and escalation; the LLM node is never reached, which is asserted in `tests/test_support_graph.py` and visible as a missing `agent` span in LangSmith.
+   - Unsafe requests route straight to refusal and escalation; no LLM-backed agent is reached, which is asserted in `tests/test_support_graph.py` and visible as missing `policy_agent` / `order_agent` spans in LangSmith.
 2. **Guarded tool loop (implemented)**:
    - Tool calls go through `ToolRegistry`, which validates arguments and caps calls per turn; failures and loop-guard trips create escalation tickets.
    - The `finalize` node labels each reply's grounding (`retrieval` / `tool_result` / `none`) and guarantees the reply names any ticket created.
@@ -174,8 +174,8 @@ gantt
   1. `redact_pii`
   2. `safety_check`
   3. `resolve_memory`
-  4. `plan_and_retrieve`
-  5. `agent` ⇄ `tools`
+  4. `supervisor` (deterministic routing)
+  5. `policy_agent` (retrieval + LLM, no tools) and `order_agent` ⇄ `tools` (LLM + allow-listed order tools, no documents)
   6. `escalate`
   7. `finalize`
 

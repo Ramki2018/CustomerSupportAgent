@@ -16,10 +16,25 @@ def route_after_safety(state: SupportState) -> Literal["escalate", "resolve_memo
     return "resolve_memory" if state.get("is_safe", True) else "escalate"
 
 
-def route_after_agent(state: SupportState) -> Literal["tools", "finalize"]:
+def route_to_specialist(state: SupportState) -> Literal["order_agent", "policy_agent"]:
+    """The supervisor's decision, read from state. Pure and deterministic (no LLM).
+
+    Mixed requests ("both") start with the policy agent, then continue to the order agent.
+    """
+    return "order_agent" if state.get("route") == "order" else "policy_agent"
+
+
+def route_after_policy_agent(state: SupportState) -> Literal["escalate", "order_agent", "finalize"]:
+    """The policy agent has no tools; an attempted tool call is a violation and escalates."""
+    if state.get("needs_ticket"):
+        return "escalate"
+    return "order_agent" if state.get("route") == "both" else "finalize"
+
+
+def route_after_order_agent(state: SupportState) -> Literal["tools", "finalize"]:
     return "tools" if state.get("pending_tool_calls") else "finalize"
 
 
-def route_after_tools(state: SupportState) -> Literal["escalate", "agent"]:
-    """The tool loop guard sets `needs_ticket`; otherwise return to the agent."""
-    return "escalate" if state.get("needs_ticket") else "agent"
+def route_after_tools(state: SupportState) -> Literal["escalate", "order_agent"]:
+    """The tool loop guard sets `needs_ticket`; otherwise return to the order agent."""
+    return "escalate" if state.get("needs_ticket") else "order_agent"

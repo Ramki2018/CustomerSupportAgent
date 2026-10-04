@@ -30,7 +30,7 @@ cannot show whether a model *obeys* "never invent policy details". That question
 real model — see the next section, which overturns the assumption made here.
 
 **Default prompt selected:** `v2_role_and_constraints`, used **only together with retrieval**
-(concise `v3` is used adaptively, see Phase 7 feedback-driven switching in the `plan_and_retrieve`
+(concise `v3` is used adaptively, see Phase 7 feedback-driven switching in the `supervisor`
 graph node). The justification is *not* that v2 prevents fabrication — the real-model run
 below shows it does not.
 

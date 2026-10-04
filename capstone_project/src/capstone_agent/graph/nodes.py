@@ -5,8 +5,16 @@ registry, and feedback store) and read those attributes at call time. Each node
 returns only the fields it owns, and appends its name to `trace` so every turn
 records the exact path it took.
 
-Safety decisions (`safety_check`, loop guard, tool validation) are plain Python;
-the LLM is only reachable through the `agent` node, after the safety gate.
+Roles:
+  - `supervisor`    deterministic router (no LLM): order agent if an order ID is present,
+                    otherwise policy agent
+  - `policy_agent`  retrieval + LLM, with NO tools and no access to order data
+  - `order_agent`   LLM + order tools, with NO policy documents
+Agents communicate only through shared graph state (`route`, `plan`, `answer`,
+`sources`); neither calls the other.
+
+Safety decisions (`safety_check`, tool permissions, loop guard, tool validation) are plain
+Python; the LLM is only reachable through a specialist agent, after the safety gate.
 """
 
 from __future__ import annotations
@@ -17,7 +25,7 @@ import re
 from ..agents.llm_agent import PROMPT_VARIANTS
 from ..logging_utils import get_logger, log_interaction, sanitize_user_message
 from ..safety import check as safety_check
-from ..tools import TOOL_REGISTRY, TOOL_SCHEMAS, ToolError
+from ..tools import ORDER_AGENT_TOOL_SCHEMAS, ORDER_AGENT_TOOLS, TOOL_REGISTRY, ToolError
 from .state import SupportState
 
 logger = get_logger("support_graph")
@@ -27,15 +35,37 @@ logger = get_logger("support_graph")
 _MULTI_STEP_PATTERN = re.compile(r"status.*return|return.*status", re.IGNORECASE)
 _PRONOUN_REF_PATTERN = re.compile(r"\bit\b|\bthat order\b", re.IGNORECASE)
 _ORDER_ID_PATTERN = re.compile(r"ORD-\d{3,}")
+_POLICY_WORDS_PATTERN = re.compile(r"\bpolic(?:y|ies)\b|\bwarranty\b|\bprice[- ]?match", re.IGNORECASE)
+_MODEL_SOURCES_LINE = re.compile(r"\s*Sources?:[^\n]*\s*$", re.IGNORECASE)
 
 LOOP_GUARD_REPLY = "I'm having trouble resolving this automatically. I've escalated it to a human agent."
 CONCISE_VARIANT = "v3_role_constraints_concise"
+
+POLICY_ROLE = (
+    "ROLE: policy agent. Answer only from the retrieved policy context below. "
+    "You cannot look up orders or take actions."
+)
+ORDER_ROLE = (
+    "ROLE: order agent. Use the order tools to answer. You have no policy documents, "
+    "so do not state store policy beyond what a tool result contains."
+)
 
 
 def plan_for(message: str) -> list[str]:
     if _MULTI_STEP_PATTERN.search(message):
         return ["get_order_status", "check_return_eligibility"]
     return ["single_step"]
+
+
+def route_for(message: str) -> str:
+    """Deterministic supervisor rule.
+
+    An order ID (typed or resolved from memory) means order work; explicit policy wording as
+    well means a mixed request, so both specialists answer and their replies are merged.
+    """
+    if not _ORDER_ID_PATTERN.search(message):
+        return "policy"
+    return "both" if _POLICY_WORDS_PATTERN.search(message) else "order"
 
 
 def _trace(state: SupportState, name: str) -> list[str]:
@@ -56,6 +86,7 @@ class SupportNodes:
             "safety_reason": "",
             "plan": [],
             "prompt_variant": "",
+            "route": "",
             "retrieved": [],
             "sources": [],
             "messages": [],
@@ -109,38 +140,64 @@ class SupportNodes:
             update["last_order_id"] = last_order_id
         return update
 
-    def plan_and_retrieve(self, state: SupportState) -> SupportState:
-        """Adapt the prompt to feedback, plan the task, and ground the prompt in retrieval."""
+    def supervisor(self, state: SupportState) -> SupportState:
+        """Route the request to a specialist agent. Deterministic rules, no LLM call."""
         message = state["sanitized_message"]
         hints = self.agent.feedback_store.preference_hints()
         variant = CONCISE_VARIANT if hints.get("prefer_concise") else self.agent.variant
+        return {
+            "plan": plan_for(message),
+            "prompt_variant": variant,
+            "route": route_for(message),
+            "trace": _trace(state, "supervisor"),
+        }
 
-        plan = plan_for(message)
-        system_prompt = PROMPT_VARIANTS[variant] + f"\n\nPLAN: {plan}"
-
+    def policy_agent(self, state: SupportState) -> SupportState:
+        """Answer policy questions from retrieved documents. Has no tools and no order access."""
+        message = state["sanitized_message"]
         retrieved = [
             {"doc_id": chunk.doc_id, "text": chunk.text, "score": float(score)}
             for score, chunk in self.agent.kb.search(message)
         ]
+        system_prompt = PROMPT_VARIANTS[state["prompt_variant"]] + f"\n\n{POLICY_ROLE}"
         if retrieved:
             context = "\n\n".join(f"[{r['doc_id']}] {r['text']}" for r in retrieved)
             system_prompt += f"\n\nRETRIEVED CONTEXT:\n{context}"
+        messages = [{"role": "system", "content": system_prompt}, *state.get("history", [])]
 
-        return {
-            "plan": plan,
-            "prompt_variant": variant,
+        result = self.agent.llm.chat(messages, tools=None)
+        update: SupportState = {
             "retrieved": retrieved,
             "sources": sorted({r["doc_id"] for r in retrieved}),
-            "messages": [{"role": "system", "content": system_prompt}, *state.get("history", [])],
-            "trace": _trace(state, "plan_and_retrieve"),
+            "trace": _trace(state, "policy_agent"),
         }
+        if result.get("tool_calls"):
+            # This agent holds no tools, so a tool call is a violation: hand off to a human.
+            logger.warning("Policy agent attempted a tool call; escalating")
+            update.update(answer=LOOP_GUARD_REPLY, needs_ticket=True, escalation_reason="policy agent attempted a tool call")
+        else:
+            answer = result["content"] or ""
+            # For a mixed request the order agent runs next; keep this part for the merge in finalize.
+            update.update(answer=answer, policy_answer=answer)
+        return update
 
-    def call_llm(self, state: SupportState) -> SupportState:
-        result = self.agent.llm.chat(state["messages"], tools=TOOL_SCHEMAS)
+    def order_agent(self, state: SupportState) -> SupportState:
+        """Handle order questions with the order tools. Sees no policy documents."""
+        messages = state.get("messages") or []
+        if not messages:
+            system_prompt = (
+                PROMPT_VARIANTS[state["prompt_variant"]] + f"\n\n{ORDER_ROLE}\n\nPLAN: {state.get('plan', [])}"
+            )
+            messages = [{"role": "system", "content": system_prompt}, *state.get("history", [])]
+
+        result = self.agent.llm.chat(messages, tools=ORDER_AGENT_TOOL_SCHEMAS)
+        update: SupportState = {"messages": messages, "trace": _trace(state, "order_agent")}
         tool_calls = result.get("tool_calls")
         if tool_calls:
-            return {"pending_tool_calls": tool_calls, "trace": _trace(state, "agent")}
-        return {"answer": result["content"] or "", "pending_tool_calls": [], "trace": _trace(state, "agent")}
+            update["pending_tool_calls"] = tool_calls
+        else:
+            update.update(answer=result["content"] or "", pending_tool_calls=[])
+        return update
 
     def run_tools(self, state: SupportState) -> SupportState:
         """Execute pending tool calls through the guarded ToolRegistry."""
@@ -158,10 +215,14 @@ class SupportNodes:
             except json.JSONDecodeError:
                 arguments = {}
             try:
-                tool_result = registry.execute(name, arguments, count)
+                if name == "escalate_to_human" and ticket_id:
+                    # One handoff per turn: a second request returns the existing ticket.
+                    tool_result = {"ticket_id": ticket_id, "status": "already_queued_for_human_review"}
+                else:
+                    tool_result = registry.execute(name, arguments, count, allowed=ORDER_AGENT_TOOLS)
+                    if name == "escalate_to_human":
+                        escalated, ticket_id = True, tool_result.get("ticket_id", ticket_id)
                 logger.info(f"Tool '{name}' called with {arguments} -> {tool_result}")
-                if name == "escalate_to_human":
-                    escalated, ticket_id = True, tool_result.get("ticket_id", ticket_id)
             except ToolError as exc:
                 logger.warning(f"Tool call failed/blocked: {name}({arguments}) -> {exc}")
                 tool_result = TOOL_REGISTRY["escalate_to_human"](reason=f"{name}: {exc}", session_id=session_id)
@@ -208,12 +269,18 @@ class SupportNodes:
         }
 
     def finalize(self, state: SupportState) -> SupportState:
-        """Attach provenance, label how the reply is grounded, and record the turn."""
+        """Merge specialist answers, attach provenance, label grounding, and record the turn."""
         content = state.get("answer", "")
         used_tools = bool(state.get("tool_calls_made"))
-        # Tool-grounded replies come from the order system, so retrieved policy docs are not their source.
-        sources = [] if used_tools else state.get("sources", [])
+        policy_answer = state.get("policy_answer", "")
+        if state.get("route") == "both" and policy_answer:
+            # Mixed request: order agent's answer first, then the policy agent's, no extra LLM call.
+            content = f"{content}\n\n{policy_answer}"
+        # Only the policy agent retrieves documents, so `sources` is empty for order-only turns.
+        sources = state.get("sources", [])
         if sources:
+            # Drop a trailing "Sources: ..." line the model may have written itself; ours is authoritative.
+            content = _MODEL_SOURCES_LINE.sub("", content)
             content += "\n\nSources: " + ", ".join(sources)
 
         # The reply must match the actual handoff state, whatever wording the model chose.
@@ -221,7 +288,9 @@ class SupportNodes:
         if state.get("escalated") and ticket_id and ticket_id not in content:
             content += f"\n\nI've created ticket {ticket_id} so a human agent can follow up."
 
-        if used_tools:
+        if used_tools and sources:
+            grounding = "tool_result+retrieval"
+        elif used_tools:
             grounding = "tool_result"
         elif sources:
             grounding = "retrieval"

@@ -52,17 +52,23 @@ The first real-model run **failed 2 of 7 cases for reasons the mock could never 
 contract, so only a real model could prove tool calling works end to end. The mock-only
 7/7 had been giving false assurance on this point.
 
+**Same 7 cases through the multi-agent graph.** After the single agent was split into a
+policy agent and an order agent, both runs still pass 7/7 (mock avg ~13 ms; real model avg
+~1,580 ms). Each result records its `route` (`policy` / `order`), and the real run showed a
+model calling `escalate_to_human` after a tool failure had already created a ticket, so
+escalation is now idempotent within a turn (`test_escalation_is_idempotent_within_a_turn`).
+
 **Real-model results after the fixes (7/7):**
 
 | Case | Path (last nodes) | Grounding | Escalated | Observed behaviour |
 |---|---|---|---|---|
-| TC1 shipping | plan_and_retrieve → agent → finalize | retrieval | No | Cited 3-5 business days from `shipping_policy` |
-| TC2 return policy | plan_and_retrieve → agent → finalize | retrieval | No | 30-day window from `return_policy` |
+| TC1 shipping | supervisor → policy_agent → finalize | retrieval | No | Cited 3-5 business days from `shipping_policy` |
+| TC2 return policy | supervisor → policy_agent → finalize | retrieval | No | 30-day window from `return_policy` |
 | TC3 refund | redact_pii → safety_check → escalate | none | Yes (ticket) | Refused; **LLM never called** |
 | TC4 legal | redact_pii → safety_check → escalate | none | Yes (ticket) | Refused legal advice |
-| TC5 eligibility | tools → agent → finalize | tool_result | No | Model chose `check_return_eligibility`: eligible, 15 days |
-| TC6 unknown order | tools → agent → finalize | tool_result | Yes (ticket) | Tool error became a ticket; reply mentions it |
-| TC7 price match | plan_and_retrieve → agent → finalize | retrieval | No | "I do not have documentation confirming a price-match policy" |
+| TC5 eligibility | supervisor → order_agent → tools → order_agent → finalize | tool_result | No | Order agent chose `check_return_eligibility`: eligible, 15 days |
+| TC6 unknown order | supervisor → order_agent → tools → … → finalize | tool_result | Yes (ticket) | Tool error became a ticket (a repeated escalation request returns the same ticket); reply mentions it |
+| TC7 price match | supervisor → policy_agent → finalize | retrieval | No | "I do not have documentation confirming a price-match policy" |
 
 ## Root-Cause Debugged Failure Case (Required Evidence)
 

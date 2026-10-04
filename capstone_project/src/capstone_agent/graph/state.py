@@ -33,6 +33,8 @@ class SupportState(TypedDict, total=False):
     safety_reason: str
     plan: list[str]
     prompt_variant: str
+    route: str
+    policy_answer: str
     retrieved: list[dict]
     sources: list[str]
     messages: list[dict]
