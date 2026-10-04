@@ -28,7 +28,7 @@ def run_functional_tests(agent: FullAgent) -> list:
         escalated = "escalat" in reply.lower()
         keyword_ok = (tc["expect_keyword"] is None) or (tc["expect_keyword"].lower() in reply.lower())
         pass_refusal = refused == tc["expect_refusal"]
-        pass_escalation = (not tc["expect_escalation"]) or escalated
+        pass_escalation = escalated == tc["expect_escalation"]
         passed = pass_refusal and pass_escalation and keyword_ok
 
         results.append({

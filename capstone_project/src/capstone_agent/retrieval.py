@@ -1,12 +1,10 @@
 """Lightweight retrieval-augmented generation (RAG) layer.
 
-Implements TF-IDF vectors + cosine similarity in pure Python (no numpy/scipy/
-sklearn) as a dependency-light, fully offline stand-in for neural embeddings +
-a FAISS/Chroma vector store. Kept dependency-free deliberately: this workspace's
-security policy blocks some compiled numpy/scipy binaries, and a pure-Python
-implementation is also trivially portable/reproducible for grading. The
-`KnowledgeBase.search` interface is the swap point if real embeddings/a real
-vector store are wired in later (see docs/04_engineering_justification.md).
+Uses Qdrant-backed semantic search when the vector store is available, and
+falls back to a pure-Python TF-IDF index when semantic retrieval is not ready.
+That keeps the project runnable in offline/demo environments while still
+demonstrating the end-to-end semantic retrieval path required by the deployed
+agent.
 """
 import math
 import re
@@ -15,6 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import config
+from .rag.embeddings import get_embedding_provider
+from .rag.vector_store import get_default_vector_store
 
 _TOKEN_RE = re.compile(r"[a-zA-Z']+")
 _STOPWORDS = {
@@ -22,6 +22,37 @@ _STOPWORDS = {
     "this", "that", "with", "as", "be", "can", "if", "you", "your", "i", "do", "does",
     "we", "our", "at", "by", "from", "will", "not", "have", "has", "not", "so",
 }
+
+
+def _policy_hint(query: str) -> str | None:
+    lowered = query.lower()
+    if any(term in lowered for term in ("shipping", "delivery", "deliver", "arrive", "arrival", "business day", "business days", "ship")):
+        return "shipping"
+    if any(term in lowered for term in ("return", "refund", "refunds", "eligible")):
+        return "return"
+    if "warranty" in lowered:
+        return "warranty"
+    if "faq" in lowered:
+        return "faq"
+    return None
+
+
+def _boost_results(results: list[tuple[float, "Chunk"]], query: str) -> list[tuple[float, "Chunk"]]:
+    hint = _policy_hint(query)
+    if hint is None:
+        return results
+
+    boosted: list[tuple[float, Chunk]] = []
+    for score, chunk in results:
+        doc_id = chunk.doc_id.lower()
+        adjusted = score
+        if hint in doc_id:
+            adjusted += 2.0
+        elif hint == "shipping" and "delivery" in doc_id:
+            adjusted += 1.0
+        boosted.append((adjusted, chunk))
+    boosted.sort(key=lambda item: item[0], reverse=True)
+    return boosted
 
 
 def _tokenize(text: str) -> list:
@@ -64,6 +95,8 @@ class KnowledgeBase:
         self._idf = {term: math.log((1 + n_docs) / (1 + df)) + 1 for term, df in doc_freq.items()}
         self._doc_vectors = [self._to_tfidf_vector(tc) for tc in self._doc_term_counts]
         self._doc_norms = [math.sqrt(sum(v * v for v in vec.values())) or 1.0 for vec in self._doc_vectors]
+        self._semantic_store = get_default_vector_store()
+        self._embedding_provider = get_embedding_provider()
 
     def _to_tfidf_vector(self, term_counts: Counter) -> dict:
         return {term: count * self._idf.get(term, 0.0) for term, count in term_counts.items()}
@@ -75,8 +108,27 @@ class KnowledgeBase:
         return dot / denom if denom else 0.0
 
     def search(self, query: str, top_k: int = config.RETRIEVAL_TOP_K) -> list:
-        """Returns a list of (score, Chunk) pairs, best first. Empty if nothing relevant
-        is found — callers must handle this case rather than let the LLM guess."""
+        """Returns a list of (score, Chunk) pairs, best first.
+
+        Semantic Qdrant search is tried first; TF-IDF is a fallback for offline
+        environments or when the vector store is unavailable.
+        """
+        try:
+            semantic_results = self._semantic_store.search(
+                query,
+                top_k=top_k,
+                embedding_provider=self._embedding_provider,
+            )
+        except Exception:
+            semantic_results = []
+
+        if semantic_results:
+            semantic_pairs = [
+                (result["score"], Chunk(result["doc_id"], result["text"]))
+                for result in semantic_results
+            ]
+            return _boost_results(semantic_pairs, query)
+
         if not self.chunks:
             return []
         query_terms = Counter(_tokenize(query))
@@ -84,4 +136,4 @@ class KnowledgeBase:
         query_norm = math.sqrt(sum(v * v for v in query_vec.values())) or 1.0
         scored = [(self._cosine_similarity(query_vec, query_norm, i), chunk) for i, chunk in enumerate(self.chunks)]
         scored.sort(key=lambda x: x[0], reverse=True)
-        return [(score, chunk) for score, chunk in scored[:top_k] if score > 0]
+        return _boost_results([(score, chunk) for score, chunk in scored[:top_k] if score > 0], query)

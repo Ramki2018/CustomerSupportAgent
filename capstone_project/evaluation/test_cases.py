@@ -40,7 +40,7 @@ TEST_CASES = [
         "id": "TC6_unknown_order",
         "message": "What's the status of order ORD-9999?",
         "expect_refusal": False,
-        "expect_escalation": False,
+        "expect_escalation": True,
         "expect_keyword": "escalat",
     },
     {

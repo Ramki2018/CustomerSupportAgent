@@ -9,7 +9,7 @@ import json
 
 from ..logging_utils import get_logger, log_interaction, sanitize_user_message
 from ..safety import check as safety_check
-from ..tools import TOOL_SCHEMAS, ToolError, ToolRegistry
+from ..tools import TOOL_REGISTRY, TOOL_SCHEMAS, ToolError, ToolRegistry
 from .rag_agent import DEFAULT_VARIANT, PROMPT_VARIANTS, RagAgent
 
 logger = get_logger("tool_agent")
@@ -58,13 +58,21 @@ class ToolAgent(RagAgent):
                     tool_result = self.tool_registry.execute(name, arguments, call_count)
                     logger.info(f"Tool '{name}' called with {arguments} -> {tool_result}")
                 except ToolError as exc:
-                    tool_result = {"error": str(exc)}
                     logger.warning(f"Tool call failed/blocked: {name}({arguments}) -> {exc}")
+                    tool_result = TOOL_REGISTRY["escalate_to_human"](
+                        reason=f"{name}: {exc}",
+                        session_id=session_id,
+                    )
                 call_count += 1
                 messages.append({"role": "assistant", "content": None, "tool_calls": [call]})
                 messages.append({"role": "tool", "name": name, "content": json.dumps(tool_result)})
 
             if call_count >= self.tool_registry.max_calls_per_turn:
-                fallback = "I'm having trouble resolving this automatically. Escalating to a human agent."
+                tool_result = TOOL_REGISTRY["escalate_to_human"](
+                    reason="tool loop guard reached",
+                    session_id=session_id,
+                )
+                fallback = "I'm having trouble resolving this automatically. I've escalated it to a human agent."
+                messages.append({"role": "tool", "name": "escalate_to_human", "content": json.dumps(tool_result)})
                 log_interaction(session_id, "assistant", fallback, {"tool_calls_made": call_count, "loop_guard": True})
                 return fallback

@@ -9,7 +9,7 @@ from ..feedback import FeedbackStore
 from ..logging_utils import get_logger, log_interaction, sanitize_user_message
 from ..memory import ConversationMemory
 from ..safety import check as safety_check
-from ..tools import TOOL_SCHEMAS, ToolError
+from ..tools import TOOL_REGISTRY, TOOL_SCHEMAS, ToolError
 from .tool_agent import DEFAULT_VARIANT, PROMPT_VARIANTS, ToolAgent
 
 logger = get_logger("full_agent")
@@ -107,13 +107,21 @@ class FullAgent(ToolAgent):
                 try:
                     tool_result = self.tool_registry.execute(name, arguments, call_count)
                 except ToolError as exc:
-                    tool_result = {"error": str(exc)}
+                    tool_result = TOOL_REGISTRY["escalate_to_human"](
+                        reason=f"{name}: {exc}",
+                        session_id=session_id,
+                    )
                 call_count += 1
                 messages.append({"role": "assistant", "content": None, "tool_calls": [call]})
                 messages.append({"role": "tool", "name": name, "content": json.dumps(tool_result)})
 
             if call_count >= self.tool_registry.max_calls_per_turn:
-                fallback = "I'm having trouble resolving this automatically. Escalating to a human agent."
+                tool_result = TOOL_REGISTRY["escalate_to_human"](
+                    reason="tool loop guard reached",
+                    session_id=session_id,
+                )
+                fallback = "I'm having trouble resolving this automatically. I've escalated it to a human agent."
+                messages.append({"role": "tool", "name": "escalate_to_human", "content": json.dumps(tool_result)})
                 memory.add_turn("assistant", fallback)
                 log_interaction(session_id, "assistant", fallback, {"loop_guard": True})
                 return fallback

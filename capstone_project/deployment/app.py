@@ -24,7 +24,7 @@ from capstone_agent.langchain_runtime import get_chat_model, warm_up_langchain_r
 from capstone_agent.logging_utils import get_logger
 from capstone_agent.logging_utils import sanitize_user_message
 from capstone_agent.rag.embeddings import get_embedding_provider
-from capstone_agent.rag.vector_store import QdrantVectorStore
+from capstone_agent.rag.vector_store import get_default_vector_store
 
 logger = get_logger("deployment")
 graph = None
@@ -45,13 +45,7 @@ async def lifespan(app: FastAPI):
         # 1) load env already happens via config import
         # 2) create Qdrant connection
         embedding_provider = get_embedding_provider()
-        embedding_dim = len(embedding_provider.embed_query("dimension probe"))
-        vector_store = QdrantVectorStore(
-            collection_name=config.QDRANT_COLLECTION,
-            vector_size=embedding_dim,
-            url=config.QDRANT_URL,
-            api_key=config.QDRANT_API_KEY or None,
-        )
+        vector_store = get_default_vector_store()
         try:
             vector_store.ensure_collection()
             logger.info("Qdrant connection initialized on startup")

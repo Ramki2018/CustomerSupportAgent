@@ -115,7 +115,7 @@ def _extract_markdown_chunks(path: Path) -> list[IngestedChunk]:
                 IngestedChunk(
                     id=_stable_chunk_id(path.stem, None, section_index * 100 + chunk_index, chunk_text_value),
                     text=chunk_text_value,
-                    source=path.name,
+                    source=path.stem,
                     page=None,
                     section=section,
                     policy_type=policy_type,
@@ -149,7 +149,7 @@ def _extract_pdf_chunks(path: Path) -> list[IngestedChunk]:
                     IngestedChunk(
                         id=_stable_chunk_id(path.stem, page_number, chunk_index, chunk_text_value),
                         text=chunk_text_value,
-                        source=path.name,
+                        source=path.stem,
                         page=page_number,
                         section=section,
                         policy_type=policy_type,

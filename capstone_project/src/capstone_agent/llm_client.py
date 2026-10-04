@@ -24,6 +24,23 @@ class MockLLM:
     def chat(self, messages: list, tools: list | None = None) -> dict:
         last_message = messages[-1]
         if last_message["role"] == "tool":
+            tool_name = last_message.get("name") or ""
+            tool_data = self._parse_tool_result(last_message)
+            last_user = self._last_user_message(messages)
+            if (
+                tool_name == "get_order_status"
+                and tool_data.get("order_id")
+                and re.search(r"return|refund eligib|can i return|eligible for a return", last_user, re.IGNORECASE)
+            ):
+                return self._tool_call("check_return_eligibility", {"order_id": tool_data["order_id"]})
+            if tool_name == "check_return_eligibility":
+                status_data = self._find_previous_tool_result(messages, "get_order_status")
+                if status_data:
+                    return {
+                        "role": "assistant",
+                        "content": self._compose_status_and_eligibility(status_data, tool_data),
+                        "tool_calls": None,
+                    }
             return self._compose_from_tool_result(last_message)
 
         system = next((m["content"] for m in messages if m["role"] == "system"), "")
@@ -34,7 +51,11 @@ class MockLLM:
             order_match = re.search(r"ORD-\d{3,}", last_user)
             if order_match:
                 order_id = order_match.group(0)
-                if re.search(r"return|refund eligib", last_user, re.IGNORECASE):
+                has_status_request = re.search(r"status|where is|track", last_user, re.IGNORECASE) is not None
+                has_return_request = re.search(r"return|refund eligib|can i return|eligible for a return", last_user, re.IGNORECASE) is not None
+                if has_status_request:
+                    return self._tool_call("get_order_status", {"order_id": order_id})
+                if has_return_request:
                     return self._tool_call("check_return_eligibility", {"order_id": order_id})
                 return self._tool_call("get_order_status", {"order_id": order_id})
 
@@ -42,6 +63,13 @@ class MockLLM:
         retrieved = self._extract_retrieved_context(messages)
         content = self._compose_answer(retrieved, style)
         return {"role": "assistant", "content": content, "tool_calls": None}
+
+    @staticmethod
+    def _last_user_message(messages: list) -> str:
+        for message in reversed(messages):
+            if message.get("role") == "user":
+                return message.get("content") or ""
+        return ""
 
     @staticmethod
     def _extract_retrieved_context(messages: list) -> str:
@@ -60,6 +88,39 @@ class MockLLM:
             "content": None,
             "tool_calls": [{"id": "call_1", "function": {"name": name, "arguments": json.dumps(arguments)}}],
         }
+
+    @staticmethod
+    def _parse_tool_result(tool_message: dict) -> dict:
+        try:
+            return json.loads(tool_message.get("content") or "{}")
+        except json.JSONDecodeError:
+            return {}
+
+    @staticmethod
+    def _find_previous_tool_result(messages: list, tool_name: str) -> dict:
+        for message in reversed(messages[:-1]):
+            if message.get("role") == "tool" and message.get("name") == tool_name:
+                return MockLLM._parse_tool_result(message)
+        return {}
+
+    @staticmethod
+    def _compose_status_and_eligibility(status_data: dict, eligibility_data: dict) -> str:
+        status_line = (
+            f"Order {status_data.get('order_id')} ({status_data.get('product')}) is currently "
+            f"'{status_data.get('status')}'."
+        )
+        if eligibility_data.get("eligible"):
+            return (
+                f"{status_line} Good news — this order is within the "
+                f"{eligibility_data.get('window_days')}-day return window "
+                f"({eligibility_data.get('days_elapsed')} days since delivery), so it's eligible for return."
+            )
+        return (
+            f"{status_line} This order is outside the "
+            f"{eligibility_data.get('window_days')}-day return window "
+            f"({eligibility_data.get('days_elapsed', 'N/A')} days since delivery), so it isn't eligible "
+            f"for a standard return."
+        )
 
     @staticmethod
     def _compose_answer(retrieved: str, style: str) -> str:
@@ -82,12 +143,14 @@ class MockLLM:
 
     @staticmethod
     def _compose_from_tool_result(tool_message: dict) -> dict:
-        try:
-            data = json.loads(tool_message["content"])
-        except json.JSONDecodeError:
-            data = {}
+        data = MockLLM._parse_tool_result(tool_message)
         if "error" in data:
             content = f"I couldn't complete that automatically ({data['error']}). Escalating to a human agent."
+        elif "ticket_id" in data or data.get("status") == "queued_for_human_review":
+            content = (
+                f"I couldn't complete that automatically. I've escalated this to a human agent "
+                f"as ticket {data.get('ticket_id', 'unknown')}."
+            )
         elif "eligible" in data:
             if data["eligible"]:
                 content = (f"Good news — this order is within the {data['window_days']}-day return window "

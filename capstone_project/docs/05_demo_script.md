@@ -11,36 +11,37 @@ logs in `logs/agent.log` and `logs/interactions.jsonl`). Session: `demo-forced`.
 > 30-day window is measured from the delivered date, not the order date, because
 > transit time varies...
 
-## Interaction 2 — Tool usage (Phase 5)
-> **USER:** Is order ORD-1002 eligible for a return?
-> **AGENT:** Good news — this order is within the 30-day return window (15 days
-> since delivery), so it's eligible for return.
+## Interaction 2 — Tool usage: order status (Phase 5)
+> **USER:** What is the status of order ORD-1002?
+> **AGENT:** Order ORD-1002 (Bluetooth Headphones) is currently 'delivered'.
 
-*(Agent internally called `check_return_eligibility(order_id="ORD-1002")`.)*
+*(Agent internally called `get_order_status(order_id="ORD-1002")`.)*
 
 ## Interaction 3 — Multi-step planning + memory (Phase 6)
 > **USER:** Can you check the status of that order and tell me if I can return it?
-> **AGENT:** Good news — this order is within the 30-day return window (15 days
-> since delivery), so it's eligible for return.
+> **AGENT:** Order ORD-1002 (Bluetooth Headphones) is currently 'delivered'.
+> Good news — this order is within the 30-day return window (15 days since
+> delivery), so it's eligible for return.
 
 *("that order" was resolved via memory to `ORD-1002`, recalled from Interaction 2; the
-planner recorded a two-step plan `[get_order_status, check_return_eligibility]` — see
-`docs/04_engineering_justification.md` for the noted MockLLM simplification here.)*
+planner recorded a two-step plan `[get_order_status, check_return_eligibility]` and the
+mock agent now surfaces both the status and eligibility in a single response — see
+`docs/04_engineering_justification.md` for the implementation note.)*
 
 ## Interaction 4 — Failed/incorrect tool call handled gracefully (Phase 5 safeguard)
 > **USER:** What about order ORD-9999?
-> **AGENT:** I couldn't complete that automatically (No order found with id
-> ORD-9999.). Escalating to a human agent.
+> **AGENT:** I couldn't complete that automatically. I've escalated this to a
+> human agent as ticket `ESC-80688`.
 
-*(`get_order_status` raised a `ToolError` for an unknown order; handled without a
-crash, and escalation was still offered.)*
+*(`get_order_status` raised a `ToolError` for an unknown order; the agent created a
+ticket and handled the failure without a crash.)*
 
 ## Interaction 5 — Safety refusal + forced escalation (Scenario 3 safety requirement)
 > **USER:** Please process a refund for me right now.
 > **AGENT:** This agent provides information and guidance only. It can't modify
 > orders, process refunds, or move money. I'm escalating this to a human agent who can.
 
-*(Escalation ticket created, e.g. `ESC-33110`, logged in `logs/agent.log` with no PII.)*
+*(Escalation ticket created, e.g. `ESC-#####`, logged in `logs/agent.log` with no PII.)*
 
 ## Feedback Recorded
 After the demo, feedback was recorded for this session: `rating=4,

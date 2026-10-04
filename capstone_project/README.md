@@ -11,8 +11,8 @@ grading, with an optional real-LLM mode.
 Helps a retail customer with return/shipping/warranty policy questions and order
 status/eligibility checks. Refuses to perform any account/money-moving action, never
 fabricates policy (RAG-grounded answers only), and escalates anything sensitive,
-ambiguous, unresolved, or transactional to a human agent — while keeping PII out of
-logs.
+ambiguous, unresolved, or transactional to a human agent — while redacting PII before
+it reaches memory, retrieval, or the LLM and keeping PII out of logs.
 
 ## Project Structure
 ```
@@ -25,7 +25,7 @@ capstone_project/
 │   ├── safety.py                 # deterministic refuse/escalate rules
 │   ├── mock_data.py              # synthetic order data
 │   ├── tools.py                   # tools + schemas + loop-guarded registry
-│   ├── retrieval.py                # pure-Python TF-IDF RAG over data/knowledge_base
+│   ├── retrieval.py                # Qdrant-backed RAG with TF-IDF fallback
 │   ├── llm_client.py               # MockLLM (offline) + OpenAI client
 │   └── agents/
 │       ├── baseline_agent.py       # Phase 2 — rules/templates only
@@ -87,12 +87,20 @@ cd src; ..\.venv\Scripts\python.exe -m capstone_agent.agents.baseline_agent; cd 
 # Evaluation harness (functional tests + root-cause bug demo)
 .\.venv\Scripts\python.exe evaluation\run_eval.py
 
+# Ingest knowledge base into Qdrant
+.\.venv\Scripts\python.exe scripts\ingest_knowledge_base.py
+
 # Unit tests
 .\.venv\Scripts\python.exe -m pytest tests -v
 
 # Deployment API
 .\.venv\Scripts\python.exe -m uvicorn deployment.app:app --reload
 # then: POST http://127.0.0.1:8000/chat  {"session_id": "s1", "message": "What is your return policy?"}
+
+# Deployment with Docker
+docker compose up --build
+# API: http://127.0.0.1:8000
+# Qdrant: http://127.0.0.1:6333
 
 ## Deploying with OpenAI
 
@@ -106,10 +114,21 @@ Notes:
 - The app will attempt to use OpenAI when `USE_MOCK_LLM=false` and `OPENAI_API_KEY` is present; if the OpenAI client fails to initialize or a chat call errors, the project logs the error and falls back to the deterministic `MockLLM` so the service stays responsive.
 - Keep your `OPENAI_API_KEY` secret (use environment variable management or a secrets store in production).
 - Expect higher latency and costs when using a real LLM; enable caching, rate-limiting, and request-size controls for production traffic.
+
+## Docker notes
+- The `api` service uses the same `.env` file as local runs.
+- The compose file points `QDRANT_URL` at the `qdrant` service so the API can talk to the vector database inside the Docker network.
+- The API health endpoint is checked automatically by Docker Compose.
+- If Docker is unavailable, the ingestion and API paths fall back to a local on-disk Qdrant store under `.qdrant/`, so you can still run `scripts\ingest_knowledge_base.py` and `uvicorn deployment.app:app --reload` locally.
 ```
 
 ## Safety Requirements (Scenario 3) — Where Enforced
 - **Refuse unsafe/policy-violating requests** → `safety.py`, checked before any LLM call.
+- **Redact PII before model-facing steps** → `logging_utils.sanitize_user_message`, applied
+  before memory, retrieval, and LLM calls in the agent pipeline.
+- **LangChain-wrapped model calls** → `langchain_runtime.py` uses `ChatOpenAI` for
+  grounded answer generation and structured evidence verification when live-model
+  mode is enabled; offline mode falls back to deterministic behavior.
 - **Never fabricate policy** → `retrieval.py` + `rag_agent.py`; if nothing relevant is
   found, the agent says so instead of guessing (verified in `evaluation/test_cases.py`,
   case TC7).
@@ -119,20 +138,23 @@ Notes:
 
 ## Evidence Included
 - `docs/03_evaluation_report.md` — metrics, a fully root-caused and fixed bug
-  (return-eligibility date logic) with before/after proof, an honestly-documented open
-  retrieval-ranking gap, and a before/after adaptive-behaviour demonstration.
+  (return-eligibility date logic) with before/after proof, the semantic retrieval
+  fix that now passes the shipping-policy case, and a before/after adaptive-behaviour
+  demonstration.
 - `docs/05_demo_script.md` / `state/demo_transcript.json` — the forced interaction
   transcript.
 - `logs/agent.log`, `logs/interactions.jsonl` — PII-redacted run logs.
 - `state/evaluation_results.json`, `state/prompt_comparison.json`,
   `state/rag_comparison.json` — raw evidence backing the docs above.
+- `scripts/ingest_knowledge_base.py` — builds chunks from `data/knowledge_base/`
+  and pushes them into Qdrant using the configured embedding backend.
 
 ## Known Limitations
 - `MockLLM` uses simple regex heuristics to decide tool calls/retrieval style, not real
   language understanding — sufficient to exercise every phase's scaffolding
   end-to-end offline, but not a substitute for a real model's reasoning (swap in
   `OPENAI_API_KEY` to use one).
-- Retrieval is TF-IDF, not neural embeddings (see
-  `docs/04_engineering_justification.md` for why, and the open TC1 finding in the
-  evaluation report for a concrete recall miss this causes).
+- Retrieval is semantic Qdrant search with a deterministic policy-type boost and a
+  TF-IDF fallback for offline bootstrap. See `docs/04_engineering_justification.md`
+  for the deployment tradeoff.
 - Order/customer data is synthetic; no real order-management system is integrated.

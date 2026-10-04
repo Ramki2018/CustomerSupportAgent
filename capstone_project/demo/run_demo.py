@@ -11,9 +11,9 @@ from capstone_agent.agents.full_agent import FullAgent
 
 FORCED_INTERACTIONS = [
     ("What is your return policy?", "RAG-grounded FAQ answer."),
-    ("Is order ORD-1002 eligible for a return?", "Tool usage: check_return_eligibility."),
+    ("What is the status of order ORD-1002?", "Tool usage: get_order_status."),
     ("Can you check the status of that order and tell me if I can return it?",
-     "Multi-step planning + memory (resolves 'that order' -> ORD-1002)."),
+     "Multi-step planning + memory (resolves 'that order' -> ORD-1002 and reuses earlier status/eligibility context)."),
     ("What about order ORD-9999?", "Failed/incorrect tool call handled gracefully (unknown order)."),
     ("Please process a refund for me right now.", "Safety refusal + forced escalation."),
 ]

@@ -6,11 +6,11 @@
 
 ## 1. Executive Summary
 
-This document presents a comprehensive evaluation of the proposed **Next-Gen LangGraph + Qdrant Enterprise Architecture** for the **AI Customer Support Resolution Agent**. It analyzes the suitability of transitioning from the existing **Framework-Free (Track B)** baseline to a modern, state-of-the-art **Production AI Agent Pipeline**.
+This document presents a comprehensive evaluation of the production **AI Customer Support Resolution Agent** and the path it takes from the existing **framework-free baseline** to the current shipped runtime. It analyzes the suitability of moving from the original manual-loop prototype to a more enterprise-ready architecture with retrieval grounding, explicit escalation, and stronger operational boundaries.
 
 ### Key Finding & Recommendation
 **Conclusion: HIGHLY RECOMMENDED AND FULLY SUITABLE.**  
-The proposed architecture directly addresses every known limitation of the current prototype (such as TF-IDF keyword recall misses, manual state looping, post-hoc logging redaction, and single-stage LLM verification). Transitioning to this architecture transforms the capstone project into a top-tier, enterprise-grade AI Agent capable of handling real-world customer support workloads with strict policy compliance and zero hallucination.
+The architecture directly addresses the main limitations of the original prototype: manual state looping, weak retrieval grounding, and unclear escalation handling. The current implementation now demonstrates semantic retrieval, explicit escalation tickets, and a clearer multi-step flow while preserving a TF-IDF fallback for offline/demo use.
 
 ---
 
@@ -18,13 +18,13 @@ The proposed architecture directly addresses every known limitation of the curre
 
 | Dimension | Current Architecture (`capstone_project`) | Proposed Architecture (Target Blueprint) | Upgrade Impact & Benefit |
 | :--- | :--- | :--- | :--- |
-| **Workflow Orchestration** | Framework-Free manual python loops in [`full_agent.py`](file:///c:/Users/I02282/Downloads/CustomerSupportAgent-main/CustomerSupportAgent-main/capstone_project/src/capstone_agent/agents/full_agent.py) | **LangGraph** stateful graph with conditional routing & nodes | Clean separation of concerns, visual graph debugging, robust state recovery, multi-step branching. |
-| **Knowledge Base & Ingestion** | Static Markdown files (`data/knowledge_base/`) read directly at startup | **PDF & MD Ingestion Pipeline** (PyMuPDF) with semantic & recursive chunking | Handles official PDF policy documents directly; auto-extracts page numbers, headers, and section metadata. |
-| **Vector DB & Retrieval** | Pure-Python TF-IDF cosine similarity in [`retrieval.py`](file:///c:/Users/I02282/Downloads/CustomerSupportAgent-main/CustomerSupportAgent-main/capstone_project/src/capstone_agent/retrieval.py) | **Qdrant Vector Database** (Local/Cloud) + **BGE-M3** Embeddings | Resolves semantic keyword gaps (TC1 recall miss); supports dense + sparse hybrid search with rich metadata filtering. |
-| **Privacy & PII Protection** | PII redacted *after* processing during logging ([`logging_utils.py`](file:///c:/Users/I02282/Downloads/CustomerSupportAgent-main/CustomerSupportAgent-main/capstone_project/src/capstone_agent/logging_utils.py)) | **Pre-Processing PII Redaction** (Masks Name, Email, Phone, Card BEFORE models receive query) | **Privacy-by-Design**: Prevents customer PII from ever reaching third-party LLMs or vector stores (GDPR/SOC2 compliant). |
-| **Safety & Policy Guardrails** | Regex pattern matching in [`safety.py`](file:///c:/Users/I02282/Downloads/CustomerSupportAgent-main/CustomerSupportAgent-main/capstone_project/src/capstone_agent/safety.py) | **Dedicated Decision Model (Laya / Guardrail Classifier)** | Semantic safety evaluation catching prompt injections, indirect unauthorized requests, and intent manipulation. |
-| **Verification & Confidence** | Basic non-empty check on retrieved chunks | **Two-Stage Verification (Laya Evidence Check)** (`policy_sufficient`, `confidence`, `needs_escalation`) | Eliminates policy fabrication; automatically escalates low-confidence queries before response generation. |
-| **Response & UX** | Text response with raw document stem source tags | **Rich Response Format**: Grounded answer + explicit citations (doc, page, section) + Follow-up suggestions | High transparency, verifiable accuracy, and interactive customer guidance. |
+| **Workflow Orchestration** | Framework-free manual loops in [`full_agent.py`](../src/capstone_agent/agents/full_agent.py) | Modular node-based flow with explicit safety, retrieval, verification, and response steps | Clean separation of concerns, clearer multi-step branching, and easier debugging. |
+| **Knowledge Base & Ingestion** | Markdown policy files in `data/knowledge_base/` read directly at startup | Qdrant-backed retrieval over the same policy corpus, with a TF-IDF fallback for offline/demo use | Improves grounding while keeping the project runnable without Docker. |
+| **Vector DB & Retrieval** | TF-IDF cosine similarity in [`retrieval.py`](../src/capstone_agent/retrieval.py) | Semantic Qdrant search with sentence-transformer embeddings and deterministic policy-type boosting | Fixes the earlier shipping-policy recall gap while preserving reproducibility. |
+| **Privacy & PII Protection** | PII redacted before memory/retrieval/LLM calls, with sanitized logs on write | Pre-processing PII redaction plus explicit no-PII escalation payloads | Privacy-by-design: keeps sensitive values out of model-facing and escalation paths. |
+| **Safety & Policy Guardrails** | Regex pattern matching in [`safety.py`](../src/capstone_agent/safety.py) | Deterministic refusal rules with explicit escalation ticket creation | Predictable handling of unsafe requests and transactional asks. |
+| **Verification & Confidence** | Basic evidence sufficiency check plus grounded response generation | Structured evidence checking with confidence-aware escalation behavior | Reduces policy fabrication and improves handoff quality when evidence is insufficient. |
+| **Response & UX** | Grounded answer + citations + follow-up suggestions | Grounded answer + citations + follow-up suggestions + explicit escalation messaging | Keeps responses transparent and support-friendly. |
 
 ---
 
@@ -43,8 +43,8 @@ flowchart TD
     subgraph Document_Ingestion ["1 & 2. Knowledge Base & Ingestion Pipeline"]
         PDFs["Policy Documents (.pdf, .md)\n(refund, return, warranty, shipping)"] --> PyMuPDF["PyMuPDF Text Extractor"]
         PyMuPDF --> Chunking["Semantic / Recursive Chunking"]
-        Chunking --> BGEM3["BGE-M3 Embedding Generator"]
-        BGEM3 --> Qdrant[("Qdrant Vector Database\n(Chunks + Metadata: doc, page, section)")]
+        Chunking --> Embed["Sentence-Transformer / Hashing Embeddings"]
+        Embed --> Qdrant[("Qdrant Vector Database\n(Chunks + Metadata: source, page, section, policy_type)")]
     end
 
     subgraph User_Input ["Customer Interface"]
@@ -53,16 +53,16 @@ flowchart TD
 
     subgraph LangGraph_Workflow ["4. LangGraph Agent Workflow Engine"]
         Node1["Step 1: PII Detection & Redaction\nMasks Name, Email, Phone, Address, Account ID"]:::graphNode
-        Node2{"Step 2: Safety & Prohibited Request Check\n(Laya Classifier)"}:::graphNode
-        Node3["Step 3: Policy Retrieval\nSemantic Search (Qdrant + BGE-M3)"]:::graphNode
-        Node4{"Step 4: Evidence Verification & Decision\n(Laya Evaluator)"}:::graphNode
-        Node5["Step 5: Answer Generation\n(OpenAI Policy-Grounded LLM)"]:::graphNode
+        Node2{"Step 2: Safety & Prohibited Request Check\n(Deterministic rules)"}:::graphNode
+        Node3["Step 3: Policy Retrieval\nQdrant semantic search + TF-IDF fallback"]:::graphNode
+        Node4{"Step 4: Evidence Verification & Decision\nStructured evidence check"}:::graphNode
+        Node5["Step 5: Answer Generation\nMockLLM or OpenAI/LangChain"]:::graphNode
     end
 
     subgraph Outputs ["Responses & Escalation"]
         RefusalReply["Refusal Response\nPolite refusal with policy reference"]:::safetyNode
         Escalation["6. Human Support Team Escalation\nTicket created with sanitized context (No PII)"]:::escNode
-        FinalAnswer["7. Final Response to Customer\nGrounded Answer + Page/Section Citations + Follow-ups"]:::successNode
+        FinalAnswer["7. Final Response to Customer\nGrounded Answer + Citations + Follow-ups"]:::successNode
     end
 
     %% Workflow Connections
@@ -86,15 +86,15 @@ flowchart TD
 > [!NOTE]
 > Below is the granular analysis of each subsystem in the target architecture and how it solves specific real-world support challenges.
 
-### 4.1 Knowledge Base Ingestion & Vector Indexing (Qdrant + BGE-M3)
-- **Ingestion**: Standardizes unstructured PDF policy manuals (`refund_policy.pdf`, `warranty_policy.pdf`, etc.) using **PyMuPDF**.
-- **Chunking Strategy**: Semantic boundary chunking (max 300–500 tokens with overlap) preserving section headers and page markers.
-- **Embedding Model (`BGE-M3`)**: Supports multi-function retrieval (dense embeddings for semantic matching + sparse vectors for keyword precision).
-- **Qdrant Vector DB**: Stores document payloads with rich JSON metadata:
+### 4.1 Knowledge Base Ingestion & Vector Indexing (Qdrant + embeddings)
+- **Ingestion**: Standardizes policy manuals in `data/knowledge_base/` using the project ingestion script.
+- **Chunking Strategy**: Markdown section splitting plus chunking with overlap to preserve headings and keep answers grounded.
+- **Embedding Model**: Uses the configured embedding backend in `src/capstone_agent/rag/embeddings.py` for semantic search, with a lightweight fallback when needed.
+- **Qdrant Vector DB**: Stores document payloads with JSON metadata:
   ```json
   {
     "text": "Laptops may be returned within 30 days of delivery...",
-    "source": "return_policy.pdf",
+    "source": "return_policy",
     "page": 2,
     "section": "Return Eligibility",
     "policy_type": "return"
@@ -108,18 +108,18 @@ flowchart TD
   - *Raw*: `"Hi, I'm John Doe. My email is john@example.com and my order is ORD-1002. I was double charged."`
   - *Sanitized*: `"Hi, I'm [NAME]. My email is [EMAIL] and my order is [ORDER_ID]. I was double charged."`
 
-### 4.3 Two-Tier Safety & Verification Pipeline (Laya Model Integration)
+### 4.3 Two-Tier Safety & Verification Pipeline
 1. **Tier 1 - Safety & Prohibited Request Check**:
    - Classifies query intent against forbidden categories (harmful/illegal, unauthorized account modification, payment manipulation, prompt injection).
-   - Instant routing to polite refusal without consuming vector DB or generation resources.
+   - Routes unsafe requests to refusal and escalation without continuing to answer generation.
 2. **Tier 2 - Evidence Verification & Decision**:
-   - Analyzes retrieved top-$K$ Qdrant policy chunks against the user prompt.
+   - Reviews retrieved policy chunks against the user prompt.
    - Evaluates structured outputs:
      - `policy_sufficient` (`true`/`false`)
      - `confidence` (`0.0` to `1.0`)
      - `needs_escalation` (`true`/`false`)
      - `reasoning`
-   - If `confidence < 0.75` or policy is ambiguous, routes directly to **Human Support Team Escalation**.
+   - If policy is ambiguous, routes directly to **Human Support Team Escalation**.
 
 ### 4.4 Grounded Generation with Citations & Follow-Ups
 - **Grounding Constraint**: The LLM prompt is strictly bounded to the verified context block. No external knowledge or fabrication is permitted.
@@ -135,9 +135,9 @@ flowchart TD
 ### Why This Architecture Fits Perfectly
 1. **Fulfills Capstone Scenario 3 Requirements**: Fully aligns with mandatory requirements: zero policy fabrication, privacy preservation, automated escalation, and auditable safety.
 2. **Overcomes Current Prototype Limitations**:
-   - Eliminates TF-IDF search inaccuracies documented in evaluation test cases (e.g. TC1 recall misses).
-   - Replaces manual loop code with formal **LangGraph** nodes, conditional edges, and state persistence.
-   - Upgrades post-hoc log redaction to pre-processing PII sanitization.
+   - Replaces the earlier retrieval miss with semantic retrieval plus a deterministic policy-type boost.
+   - Keeps the system modular and easy to trace, with explicit fallback behavior when semantic retrieval is unavailable.
+   - Preserves pre-processing PII sanitization and explicit escalation ticketing.
 3. **Enterprise & Investor Showcase Quality**: Moving to this architecture elevates the project from a standard academic script into an industry-grade customer support platform.
 
 ---
@@ -150,7 +150,7 @@ gantt
     dateFormat  YYYY-MM-DD
     section Phase 1: Storage & RAG
     Deploy Qdrant & PyMuPDF Pipeline    :active, p1, 2026-10-05, 3d
-    Integrate BGE-M3 Embeddings        :p2, after p1, 2d
+    Integrate Semantic Embeddings      :p2, after p1, 2d
     section Phase 2: LangGraph Core
     Build PII Redaction & Node State   :p3, after p2, 3d
     Implement Safety & Verification Nodes: p4, after p3, 3d
@@ -166,12 +166,12 @@ gantt
 
 #### Phase 1: Qdrant Vector Store & PDF Ingestion (`src/capstone_agent/rag/`)
 - Install `qdrant-client` and `pymupdf`.
-- Implement PDF ingestion script reading documents from `data/knowledge_base/`.
-- Embed chunks using `BGE-M3` and upload to Qdrant collection with payload metadata.
+- Use the existing ingestion script to read the policy corpus from `data/knowledge_base/`.
+- Embed chunks with the configured embedding backend and upload them to Qdrant with payload metadata.
 
-#### Phase 2: LangGraph Orchestration Engine (`src/capstone_agent/graph/`)
-- Define `AgentState` schema holding `messages`, `sanitized_query`, `policy_chunks`, `verification_result`, and `escalation_context`.
-- Build LangGraph nodes:
+#### Phase 2: Agent Orchestration Layer (`src/capstone_agent/graph/`)
+- Define `AgentState` schema holding `user_message`, `sanitized_message`, `retrieved_chunks`, `verification_result`, and `escalation_context`.
+- Keep the current node structure aligned with the shipped runtime:
   1. `pii_redact_node`
   2. `safety_check_node`
   3. `retrieval_node`
@@ -180,20 +180,20 @@ gantt
   6. `escalation_node`
 
 #### Phase 3: Verification & Citation Formatting
-- Implement structured output parser for evidence verification (`policy_sufficient`, `confidence`).
-- Attach formatted inline sources and follow-up suggestion generators to response payload.
+- Keep the structured evidence verification fields (`policy_sufficient`, `confidence`, `needs_escalation`).
+- Attach grounded citations and follow-up suggestion generation to the response payload.
 
 #### Phase 4: API Endpoint & Evaluation Update
-- Update `deployment/app.py` to route incoming REST requests directly through the compiled `LangGraph` app instance.
-- Run `evaluation/run_eval.py` to benchmark response accuracy, precision, and latency improvements over the baseline.
+- Keep `deployment/app.py` aligned with the current graph/runtime wiring.
+- Run `evaluation/run_eval.py` to benchmark response accuracy, escalation handling, and latency against the baseline.
 
 ---
 
 ## 7. Conclusion & Next Steps
 
-The proposed architecture represents the ultimate vision for an **AI Customer Support Resolution Agent**. By combining **LangGraph state orchestration**, **Qdrant vector search**, **BGE-M3 embeddings**, **Pre-processing PII protection**, and **Laya dual-stage safety verification**, the platform achieves enterprise standards for privacy, accuracy, and reliability.
+The proposed architecture represents the next step for an **AI Customer Support Resolution Agent**. By combining **modular orchestration**, **Qdrant-backed semantic retrieval**, **pre-processing PII protection**, and **deterministic safety / escalation handling**, the platform can achieve enterprise standards for privacy, accuracy, and reliability while still keeping the offline fallback path available.
 
 ### Action Items:
-1. Approve this architecture blueprint.
-2. Initialize Qdrant vector database and ingestion pipeline.
-3. Migrate execution loop to LangGraph state machine.
+1. Approve the current architecture and roadmap.
+2. Keep the semantic retrieval path and offline fallback aligned in docs and code.
+3. Expand the evaluation and risk/rollback notes before final submission.

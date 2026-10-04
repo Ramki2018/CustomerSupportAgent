@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+from functools import lru_cache
 from dataclasses import dataclass
 from typing import Any
 
 from .. import config
+from .embeddings import get_embedding_provider
 
 
 class VectorStore:
@@ -76,6 +78,53 @@ class QdrantVectorStore(VectorStore):
             ),
         )
 
+    def search(self, query: str, top_k: int = 5, *, embedding_provider: Any | None = None) -> list[dict]:
+        try:
+            self.ensure_collection()
+        except Exception:
+            return []
+
+        provider = embedding_provider or get_embedding_provider()
+        try:
+            query_vector = provider.embed_query(query)
+        except Exception:
+            return []
+
+        try:
+            response = self._client.query_points(
+                collection_name=self.collection_name,
+                query=query_vector,
+                limit=top_k,
+                with_payload=True,
+            )
+        except Exception:
+            return []
+
+        results: list[dict] = []
+        for point in getattr(response, "points", []) or []:
+            payload = point.payload or {}
+            text = payload.get("text", "")
+            if not text:
+                continue
+            source = payload.get("source") or str(point.id)
+            results.append(
+                {
+                    "doc_id": source,
+                    "chunk_id": str(point.id),
+                    "text": text,
+                    "score": float(point.score or 0.0),
+                    "metadata": {
+                        "source": source,
+                        "chunk_id": str(point.id),
+                        "page": payload.get("page"),
+                        "section": payload.get("section"),
+                        "policy_type": payload.get("policy_type"),
+                        "retrieval_backend": "qdrant",
+                    },
+                }
+            )
+        return results
+
     def upsert_documents(self, documents: list[dict]) -> None:
         self.ensure_collection()
         points = []
@@ -92,7 +141,13 @@ class QdrantVectorStore(VectorStore):
             )
         self._client.upsert(collection_name=self.collection_name, points=points)
 
-    def search(self, query: str, top_k: int = 5) -> list[dict]:
-        raise NotImplementedError(
-            "Search is not used by the ingestion script. Implement query-side retrieval separately."
-        )
+
+@lru_cache(maxsize=1)
+def get_default_vector_store() -> QdrantVectorStore:
+    embedding_dim = len(get_embedding_provider().embed_query("dimension probe"))
+    return QdrantVectorStore(
+        collection_name=config.QDRANT_COLLECTION,
+        vector_size=embedding_dim,
+        url=config.QDRANT_URL,
+        api_key=config.QDRANT_API_KEY or None,
+    )

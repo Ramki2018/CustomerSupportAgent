@@ -23,7 +23,7 @@ flowchart TD
     S -- blocked --> ESC[Escalate + refusal reply]
     S -- allowed --> M[Memory: resolve pronouns,<br/>recall last_order_id]
     M --> P[Plan: single-step or<br/>multi-step task list]
-    P --> R[Retrieval: KnowledgeBase.search<br/>TF-IDF over data/knowledge_base]
+    P --> R[Retrieval: KnowledgeBase.search<br/>Qdrant semantic search + TF-IDF fallback]
     R --> L[LLM: MockLLM or OpenAI<br/>chat + tool schemas]
     L -- tool_call --> T[ToolRegistry.execute<br/>loop-guarded, validated]
     T --> L
@@ -38,7 +38,7 @@ flowchart TD
 | Decision | Rationale | Tradeoff |
 |---|---|---|
 | Deterministic `MockLLM` default, real OpenAI optional | Fully offline, reproducible grading/demo without API keys; swap via `.env` (`USE_MOCK_LLM=false`) | MockLLM's tool-call heuristics (regex-based) are simpler than real function-calling reasoning — acceptable because the *agent scaffolding* (tool schemas, safety, loop guards) is identical either way. |
-| Pure-Python TF-IDF retrieval instead of sentence-embeddings + FAISS/Chroma | This workspace's environment blocks certain compiled numpy/scipy DLLs via an Application Control security policy; a dependency-free implementation sidesteps that entirely and stays trivially portable/reproducible | Lower semantic recall than neural embeddings (see the TC1 finding in the evaluation report); `KnowledgeBase.search` is kept as a narrow interface so real embeddings can be swapped in later. |
+| Qdrant semantic retrieval with a deterministic policy-type boost, plus TF-IDF fallback | The deployed agent now needs to demonstrate end-to-end semantic retrieval while still remaining runnable in locked-down/offline environments; Qdrant gives the semantic path, while the fallback preserves reproducibility when the vector store is unavailable | The fallback path is still less semantically expressive than a fully managed vector service, but the deployed path now mirrors the submitted evidence and fixes the shipping-policy recall miss. |
 | Business rules (return-eligibility, refusal/escalation) as plain, unit-tested Python | Auditable, deterministic, testable — not left to LLM judgment, which could silently drift | Less "adaptive" than an LLM deciding case-by-case; acceptable since these are exactly the decisions that must be consistent for a support agent. |
 | Escalation "tool" writes a ticket record rather than integrating a real ticketing system | Keeps the project self-contained and reproducible | A real deployment would call an actual ticketing/CRM API. |
 | Short-term memory = sliding window (6 turns), long-term = small non-PII key/value facts | Bounded state, explicit retention rule, no risk of PII accumulation | Cannot recall arbitrary long-ago details — by design. |
