@@ -81,3 +81,85 @@ Raw JSON: `state/rag_comparison_openai.json`.
 **Conclusion:** the single largest quality and safety gain in the project comes from retrieval
 grounding, not prompt engineering. With retrieval the real model states the documented
 facts and, when nothing is documented, says so and offers a human instead of inventing.
+
+## Appendix: Full Real-Model Outputs
+
+Verbatim model outputs from the saved test runs, so the evidence can be read without opening
+the JSON files. Model: `gpt-4o-mini`. Sources: `state/prompt_comparison_openai.json` (saved 2026-10-05 08:33) and `state/rag_comparison_openai.json` (saved 2026-10-05 08:34).
+
+The tables above quote an earlier run of the same script. Real-model wording varies between runs;
+this appendix is the latest saved run, and it reaches the same conclusions (shipping time wrong in
+all three variants, v2/v3 asserting a price-match policy that is not documented, and retrieval
+removing the fabrication). Regenerate with `python scripts/generate_comparisons.py`.
+
+### A. Prompt variants, same questions, no retrieval
+
+**A1. Question: "What is your return policy?"**
+
+*v1_basic*
+> Our return policy typically allows customers to return items within a specified period, often 30 days from the date of purchase. Items should be in their original condition, with tags and packaging intact. Some exclusions may apply, such as final sale items or personalized products.
+>
+> For a more detailed and specific return policy, please check our website or contact customer service directly, as policies can vary by retailer or product. If you have a specific item in mind, let me know, and I can provide more guidance!
+
+*v2_role_and_constraints*
+> Our return policy allows you to return items within 30 days of delivery for a full refund. The item must be in its original condition and packaging. Some items may have specific return conditions, so it's important to check the details on your order confirmation. If you need further assistance, I can help guide you through the return process or escalate your request.
+
+*v3_role_constraints_concise*
+> Our return policy allows customers to return items within 30 days of receipt for a full refund, provided the items are in their original condition. Certain products may be subject to specific return conditions, so it's best to check the details for each item. If you need assistance with a specific return, please let me know!
+
+**A2. Question: "How long does shipping take?"**
+
+*v1_basic*
+> Shipping times can vary depending on several factors, including the shipping method chosen, the destination, and the carrier. Here are some general guidelines:
+>
+> 1. **Standard Shipping**: Typically takes 3-7 business days within the continental U.S. 
+> 2. **Expedited Shipping**: Usually takes 2-3 business days.
+> 3. **Overnight Shipping**: Typically delivers the next business day.
+> 4. **International Shipping**: Can vary widely, often ranging from 1-4 weeks depending on the destination and customs processing.
+>
+> For the most accurate shipping time, it's best to check with the specific retailer or shipping service you are using, as they may have more detailed information based on your order and location.
+
+*v2_role_and_constraints*
+> Shipping times can vary depending on the shipping method selected and the destination. Standard shipping typically takes 5-7 business days, while expedited shipping may take 2-3 business days. For specific details or updates on your order, please refer to the shipping confirmation email or contact customer support. If you need further assistance, I can help you with that!
+
+*v3_role_constraints_concise*
+> Shipping times can vary based on the shipping method selected and the destination. Typically, standard shipping takes 3-7 business days, while expedited shipping can deliver within 1-3 business days. For specific information on your order, please refer to your order confirmation email or contact customer support for assistance.
+
+**A3. Question: "Do you price match competitors?"**
+
+*v1_basic*
+> Whether or not a company offers price matching can vary based on its policies. It's best to check the specific store's website or contact their customer service directly to get detailed information regarding their price matching policy. If you have a particular store in mind, I can help find more information or guide you on how to inquire!
+
+*v2_role_and_constraints*
+> Our company does not have a price matching policy. However, if you find a lower price on a similar item from a competitor, we encourage you to reach out to customer service for assistance, and we can look into your specific situation. If you have further questions or need more details, I can escalate your inquiry.
+
+*v3_role_constraints_concise*
+> Our policy does not include price matching with competitors. If you have questions about pricing or promotions, please let us know.
+
+### B. With vs without retrieval, same model and prompt
+
+**B1. Question: "What is your return policy?"**
+
+*Without retrieval*
+> Our return policy allows you to return items within 30 days of receiving your order. Items must be in their original condition, unused, and in the original packaging. Some items may be exempt from returns, such as final sale or clearance items. Please ensure to include any original tags or accessories. If you'd like more specific details or have a particular item in mind, I can assist further or escalate if needed.
+
+*With retrieval*
+> Customers may return most items within 30 days of the delivery date for a full refund to the original payment method, provided the item is unused and in its original packaging. Digital goods, gift cards, and personalized/custom items are not eligible for return. 
+>
+> To start a return, you need to contact support with your order ID, and a support representative will verify eligibility before issuing a return shipping label.
+
+**B2. Question: "Is there a warranty on electronics?"**
+
+*Without retrieval*
+> Most electronics sold by our company come with a manufacturer's warranty that typically covers defects in materials and workmanship for a specific period. The duration and terms of the warranty can vary by manufacturer and product type. For specific warranty details about a particular item, I recommend checking the product page or the warranty information that comes with the product. If you need further clarification or details, I can assist you with that or escalate your request.
+
+*With retrieval*
+> Yes, most electronics products come with a 1-year manufacturer warranty that covers defects in materials and workmanship. However, it does not cover accidental damage, water damage, or normal wear and tear.
+
+**B3. Question: "Do you price match competitors?"**
+
+*Without retrieval*
+> We do not offer price matching with competitors. However, we recommend checking our website for current promotions and discounts, as we frequently offer sales and deals that you might find beneficial. If you have further questions or need assistance, I can help with that or escalate your inquiry.
+
+*With retrieval*
+> This assistant does not have documentation confirming a price-match policy. Please ask to be connected with a human agent for pricing exceptions.
