@@ -36,6 +36,6 @@ Knowledge base + Qdrant · Session memory (checkpointer) · Long-term memory · 
 
 ### Output
 Return:
-1. a PowerPoint-ready diagram (or Mermaid)
+1. a PowerPoint-ready diagram 
 2. a 3-4 sentence executive summary
 3. a short legend for the arrows and colors

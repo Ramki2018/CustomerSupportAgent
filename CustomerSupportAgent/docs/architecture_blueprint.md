@@ -16,7 +16,7 @@ The architecture directly addresses the main limitations of the original prototy
 
 ## 2. Comprehensive Architectural Comparison
 
-| Dimension | Current Architecture (`capstone_project`) | Proposed Architecture (Target Blueprint) | Upgrade Impact & Benefit |
+| Dimension | Current Architecture (`CustomerSupportAgent`) | Proposed Architecture (Target Blueprint) | Upgrade Impact & Benefit |
 | :--- | :--- | :--- | :--- |
 | **Workflow Orchestration** | LangGraph `StateGraph` in [`graph/app.py`](../src/support_agent/graph/app.py), built by [`full_agent.py`](../src/support_agent/agents/full_agent.py): PII redaction, safety gate, memory, deterministic supervisor, policy agent and order agent (guarded tool loop), escalation, finalize | Same graph hosted on LangGraph Platform with a durable checkpointer | Explicit, traceable control flow; no LLM-backed agent is reachable for refused requests; least-privilege agents. |
 | **Knowledge Base & Ingestion** | Markdown policy files in `data/knowledge_base/` read directly at startup | Qdrant-backed retrieval over the same policy corpus, with a TF-IDF fallback for offline/demo use | Improves grounding while keeping the project runnable without Docker. |

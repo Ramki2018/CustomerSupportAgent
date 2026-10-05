@@ -26,7 +26,7 @@ it reaches memory, retrieval, or the LLM and keeping PII out of logs.
 
 ## Project Structure
 ```
-capstone_project/
+CustomerSupportAgent/
 ├── src/support_agent/        # core library
 │   ├── config.py               # paths, env, feature flags
 │   ├── logging_utils.py        # PII-redacted logging
@@ -71,7 +71,7 @@ capstone_project/
 
 ## Setup
 ```powershell
-cd capstone_project
+cd CustomerSupportAgent
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 copy .env.example .env   # optional — defaults to offline MockLLM

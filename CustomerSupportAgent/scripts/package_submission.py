@@ -1,7 +1,7 @@
 """Build a clean submission zip and refuse to ship secrets.
 
 Usage (from the project root):
-    python scripts/package_submission.py                 # writes ../capstone_project_submission.zip
+    python scripts/package_submission.py                 # writes ../CustomerSupportAgent_Submission.zip
     python scripts/package_submission.py my_submission.zip
 
 What it does
@@ -57,7 +57,7 @@ def find_secrets(files: list[Path]) -> list[str]:
 
 
 def main() -> int:
-    target = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT.parent / "capstone_project_submission.zip"
+    target = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT.parent / "CustomerSupportAgent_Submission.zip"
     files = included_files()
 
     findings = find_secrets(files)
@@ -69,7 +69,7 @@ def main() -> int:
 
     with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
         for path in files:
-            archive.write(path, Path("capstone_project") / path.relative_to(ROOT))
+            archive.write(path, Path("CustomerSupportAgent") / path.relative_to(ROOT))
 
     size_mb = target.stat().st_size / 1e6
     print(f"Wrote {target} ({len(files)} files, {size_mb:.1f} MB)")

@@ -60,7 +60,7 @@ Show that the agents **communicate only through a shared state box** (route, pla
 
 ### Output format I want
 Please return:
-1. a **Mermaid architecture diagram** showing the single flow above
+1. an **architecture diagram** (image or editable drawing) showing the single flow above
 2. a short **executive summary** for the CTO (3-4 sentences)
 3. a **legend** explaining the main arrows and colors
 4. a version of the diagram optimized for a slide, with shorter labels
@@ -77,68 +77,34 @@ Please return:
 
 ---
 
-## Latest architecture diagrams (reference, current implementation)
+## Architecture diagram generation steps
 
-### 1. Request flow (single workflow, one fork)
+Follow these steps to produce the current diagrams (no code or diagram-as-code format is needed).
 
-```mermaid
-flowchart LR
-    C([Customer]) --> API["FastAPI POST /chat"]
-    API --> WF
+### Step 1 - Prepare
+1. Open ChatGPT (or any diagram-capable tool) in a new chat.
+2. Paste the full prompt from "Prompt to paste into ChatGPT" above, including the "Notes for this project" section.
+3. Ask for a slide-ready image or an editable drawing (for example PowerPoint or draw.io style), not code.
 
-    subgraph WF["Support workflow (LangGraph)"]
-        direction LR
-        R[redact_pii] --> S{safety_check}
-        S -- allowed --> M[resolve_memory]
-        M --> SUP{"supervisor<br/>(rules, no LLM)"}
-        SUP -- policy / mixed --> PA["Policy agent<br/>retrieval + LLM<br/>no tools"]
-        SUP -- order --> OA["Order agent<br/>LLM + tools<br/>no documents"]
-        PA -- mixed --> OA
-        OA <--> T["tools<br/>allow-listed, max 3 calls"]
-        PA --> FIN[finalize]
-        OA --> FIN
-        S -- unsafe --> ESC[escalate]
-        T -- call limit / failure --> ESC
-        PA -- tool call attempted --> ESC
-    end
+### Step 2 - Generate diagram 1: request flow
+1. Draw one left-to-right pipeline: Customer -> FastAPI `POST /chat` -> one large "Support workflow (LangGraph)" container -> JSON reply -> Customer.
+2. Inside the container, in order: redact_pii -> safety_check -> resolve_memory -> supervisor.
+3. Fork after the supervisor into the Policy agent (retrieval + LLM, no tools) and the Order agent (LLM + tools, no documents). Show policy-then-order for mixed questions. Join both at finalize.
+4. Add one escalate box. Draw red arrows into it from safety_check (unsafe), the tool-call limit or failure, and a tool call attempted by the policy agent.
+5. Colour the policy agent and the order agent differently, and keep the normal path grey or blue.
 
-    FIN --> OUT["JSON reply<br/>route, sources, grounding, ticket, path"]
-    ESC --> OUT
-    OUT --> API
-    API --> C
+### Step 3 - Generate diagram 2: supporting stores and observability
+1. Attach small boxes to the workflow container, not as separate flows: knowledge base + Qdrant, session checkpointer, long-term memory file, feedback store, PII-redacted logs, and the LLM client.
+2. Show the retrieval fallback chain from the policy agent: Qdrant server -> local Qdrant (`.qdrant/`) -> TF-IDF.
+3. Show `POST /feedback` writing the feedback store, which the supervisor reads.
+4. Add optional LangSmith tracing as a dashed line (off by default), and the MockLLM / OpenAI choice as a config switch on the LLM box.
 
-    classDef policy fill:#dbeafe,stroke:#2563eb,color:#000;
-    classDef order fill:#dcfce7,stroke:#16a34a,color:#000;
-    classDef esc fill:#fee2e2,stroke:#dc2626,color:#000;
-    class PA policy;
-    class OA,T order;
-    class ESC esc;
-```
+### Step 4 - Generate diagram 3: deployment view
+1. Draw Users -> reverse proxy (TLS, auth, rate limit) -> API container (FastAPI + workflow).
+2. Connect the API container to Qdrant (private network), persistent volumes (`state/`, `logs/`, `.qdrant/`), and the optional OpenAI API and LangSmith.
 
-### 2. Supporting stores and observability
-
-```mermaid
-flowchart TB
-    WF["Support workflow (LangGraph)"]
-    PA["Policy agent"] -->|search| KB[("Knowledge base<br/>markdown + Qdrant")]
-    KB -. "server unreachable" .-> LQ[("Local Qdrant<br/>.qdrant/")]
-    LQ -. "no results" .-> TF["TF-IDF fallback"]
-    WF <--> CP[("Session checkpointer<br/>history, last order ID")]
-    WF <--> LT[("Long-term memory file<br/>non-personal facts")]
-    FB["POST /feedback"] --> FS[("Feedback store")] -->|prompt hints| SUP["supervisor"]
-    WF --> LOG[("PII-redacted logs<br/>agent.log, interactions.jsonl")]
-    WF -. optional .-> LS["LangSmith tracing<br/>off by default"]
-    WF --> LLM{{"LLM client<br/>MockLLM or OpenAI (config switch)"}}
-```
-
-### 3. Deployment view
-
-```mermaid
-flowchart LR
-    U([Users]) --> RP["Reverse proxy<br/>TLS, auth, rate limit"]
-    RP --> API["API container<br/>FastAPI + workflow"]
-    API --> Q[("Qdrant<br/>private network")]
-    API --> V[("Volumes<br/>state/, logs/, .qdrant/")]
-    API --> O["OpenAI API<br/>optional"]
-    API -. optional .-> LS[LangSmith]
-```
+### Step 5 - Review and finish
+1. Check that there is exactly one request flow and one fork, and that the agents never call each other (they share state only).
+2. Check that every escalation arrow ends at the single escalate box.
+3. Ask for the shorter slide version with fewer words per box, plus a 3-4 sentence executive summary and a legend for arrows and colours.
+4. Export as PNG or SVG and add it to the slides or to `docs/`.
