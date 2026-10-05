@@ -1,4 +1,4 @@
-﻿"""Interactive CLI entry point for the full Capstone AI Support Resolution Agent.
+"""Interactive CLI entry point for the full Capstone AI Support Resolution Agent.
 
 Usage:
     python run_cli.py            # chat with the agent

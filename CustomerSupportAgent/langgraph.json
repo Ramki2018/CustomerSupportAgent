@@ -1,4 +1,4 @@
-﻿{
+{
   "dependencies": ["."],
   "graphs": {
     "support_agent": "./src/support_agent/graph/entrypoint.py:graph"

@@ -107,6 +107,7 @@ class SupportNodes:
         """Redact PII and reset all per-turn fields (state carries over between turns)."""
         sanitized = sanitize_user_message(state.get("user_message", ""))
         log_interaction(state["session_id"], "user", sanitized)
+        logger.debug("[%s] redact_pii: new turn, sanitized length=%d", state["session_id"], len(sanitized))
         return {
             "sanitized_message": sanitized,
             "is_safe": True,
@@ -133,6 +134,10 @@ class SupportNodes:
     def safety_check(self, state: SupportState) -> SupportState:
         decision = safety_check(state["sanitized_message"])
         update: SupportState = {"is_safe": decision.allowed, "trace": _trace(state, "safety_check")}
+        logger.info(
+            "[%s] safety_check: allowed=%s escalate=%s reason=%r",
+            state["session_id"], decision.allowed, decision.escalate, decision.reason,
+        )
         if not decision.allowed:
             update.update(
                 answer=decision.reason,
@@ -158,6 +163,10 @@ class SupportNodes:
             if last_order_id and _PRONOUN_REF_PATTERN.search(message):
                 message = f"{message} (referring to order {last_order_id})"
 
+        logger.info(
+            "[%s] resolve_memory: order_id_in_message=%s last_order_id=%s",
+            state["session_id"], bool(order_match), last_order_id,
+        )
         update: SupportState = {
             "sanitized_message": message,
             "history": [{"role": "user", "content": message}],
@@ -173,10 +182,13 @@ class SupportNodes:
         message = state["sanitized_message"]
         hints = self.agent.feedback_store.preference_hints()
         variant = CONCISE_VARIANT if hints.get("prefer_concise") else self.agent.variant
+        route = route_for(message)
+        plan = plan_for(message)
+        logger.info("[%s] supervisor: route=%s variant=%s plan=%s hints=%s", state["session_id"], route, variant, plan, hints)
         return {
-            "plan": plan_for(message),
+            "plan": plan,
             "prompt_variant": variant,
-            "route": route_for(message),
+            "route": route,
             "trace": _trace(state, "supervisor"),
         }
 
@@ -194,6 +206,11 @@ class SupportNodes:
             for score, chunk in self.agent.kb.search(message)
         ]
         retrieved, best_score, confident = assess_retrieval(found)
+        logger.info(
+            "[%s] policy_agent: candidates=%d kept=%d best_raw_score=%s backend=%s confident=%s docs=%s",
+            state["session_id"], len(found), len(retrieved), best_score,
+            found[0]["backend"] if found else None, confident, [f["doc_id"] for f in found],
+        )
         update: SupportState = {
             "retrieved": retrieved,
             "sources": sorted({r["doc_id"] for r in retrieved}),
@@ -213,6 +230,7 @@ class SupportNodes:
         system_prompt += f"\n\nRETRIEVED CONTEXT:\n{context}"
         messages = [{"role": "system", "content": system_prompt}, *state.get("history", [])]
 
+        logger.debug("[%s] policy_agent: calling LLM with %d messages", state["session_id"], len(messages))
         result = self.agent.llm.chat(messages, tools=None)
         if result.get("tool_calls"):
             # This agent holds no tools, so a tool call is a violation: hand off to a human.
@@ -236,6 +254,11 @@ class SupportNodes:
         result = self.agent.llm.chat(messages, tools=ORDER_AGENT_TOOL_SCHEMAS)
         update: SupportState = {"messages": messages, "trace": _trace(state, "order_agent")}
         tool_calls = result.get("tool_calls")
+        logger.info(
+            "[%s] order_agent: messages=%d tool_calls=%s",
+            state["session_id"], len(messages),
+            [c["function"]["name"] for c in tool_calls] if tool_calls else None,
+        )
         if tool_calls:
             update["pending_tool_calls"] = tool_calls
         else:
@@ -284,7 +307,11 @@ class SupportNodes:
             "ticket_id": ticket_id,
             "trace": _trace(state, "tools"),
         }
+        logger.info(
+            "[%s] run_tools: total_calls=%d escalated=%s ticket=%s", session_id, count, escalated, ticket_id or None
+        )
         if count >= registry.max_calls_per_turn:
+            logger.warning("[%s] run_tools: loop guard reached (%d calls)", session_id, count)
             update.update(answer=LOOP_GUARD_REPLY, needs_ticket=True, escalation_reason="tool loop guard reached")
         return update
 
@@ -297,6 +324,11 @@ class SupportNodes:
                 reason=state.get("escalation_reason", "escalated"), session_id=session_id
             )
             ticket_id = ticket["ticket_id"]
+        logger.warning(
+            "[%s] escalate: ticket=%s needs_ticket=%s safety_reason=%r reason=%r",
+            session_id, ticket_id or None, state.get("needs_ticket"),
+            state.get("safety_reason"), state.get("escalation_reason"),
+        )
 
         answer = state.get("answer", "")
         turns = [] if state.get("user_turn_recorded") else [{"role": "user", "content": state["sanitized_message"]}]
@@ -341,6 +373,10 @@ class SupportNodes:
             grounding = "none"
 
         trace = _trace(state, "finalize")
+        logger.info(
+            "[%s] finalize: grounding=%s sources=%s path=%s answer_len=%d",
+            state["session_id"], grounding, sources, trace, len(content),
+        )
         log_interaction(
             state["session_id"],
             "assistant",

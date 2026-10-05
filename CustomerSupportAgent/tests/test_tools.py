@@ -1,4 +1,4 @@
-﻿"""Unit tests for tool safeguards and the return-eligibility bug fix (Phase 9 evidence).
+"""Unit tests for tool safeguards and the return-eligibility bug fix (Phase 9 evidence).
 
 Run with: pytest tests/
 """

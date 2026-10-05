@@ -9,7 +9,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from .. import config
+from ..logging_utils import get_logger
 from .embeddings import get_embedding_provider
+
+logger = get_logger("vector_store")
 
 
 class VectorStore:
@@ -71,11 +74,13 @@ class QdrantVectorStore(VectorStore):
                     prefer_grpc=self.prefer_grpc,
                 )
                 client.get_collections()
+                logger.info("Connected to Qdrant server at %s", url)
                 return client
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Qdrant server %s unreachable (%s); using local store", url, exc)
 
         local_path.mkdir(parents=True, exist_ok=True)
+        logger.info("Using local Qdrant store at %s", local_path)
         return qdrant_client_cls(
             path=str(local_path),
             prefer_grpc=self.prefer_grpc,
@@ -97,12 +102,14 @@ class QdrantVectorStore(VectorStore):
         try:
             self.ensure_collection()
         except Exception:
+            logger.exception("Qdrant ensure_collection failed; returning no results")
             return []
 
         provider = embedding_provider or get_embedding_provider()
         try:
             query_vector = provider.embed_query(query)
         except Exception:
+            logger.exception("Query embedding failed; returning no results")
             return []
 
         try:
@@ -113,6 +120,7 @@ class QdrantVectorStore(VectorStore):
                 with_payload=True,
             )
         except Exception:
+            logger.exception("Qdrant query_points failed on collection %s", self.collection_name)
             return []
 
         results: list[dict] = []
@@ -138,6 +146,7 @@ class QdrantVectorStore(VectorStore):
                     },
                 }
             )
+        logger.info("Qdrant search returned %d hits (top_k=%d)", len(results), top_k)
         return results
 
     def upsert_documents(self, documents: list[dict]) -> None:

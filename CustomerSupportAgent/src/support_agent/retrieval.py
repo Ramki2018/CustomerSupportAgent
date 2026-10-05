@@ -13,8 +13,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import config
+from .logging_utils import get_logger
 from .rag.embeddings import get_embedding_provider
 from .rag.vector_store import get_default_vector_store
+
+logger = get_logger("retrieval")
 
 _TOKEN_RE = re.compile(r"[a-zA-Z']+")
 _STOPWORDS = {
@@ -124,16 +127,23 @@ class KnowledgeBase:
                 embedding_provider=self._embedding_provider,
             )
         except Exception:
+            logger.exception("Semantic search failed; falling back to TF-IDF")
             semantic_results = []
 
         if semantic_results:
+            logger.info(
+                "Semantic search: %d results, best raw score %.4f",
+                len(semantic_results), semantic_results[0]["score"],
+            )
             semantic_pairs = [
                 (result["score"], Chunk(result["doc_id"], result["text"], result["score"], "semantic"))
                 for result in semantic_results
             ]
             return _boost_results(semantic_pairs, query)
 
+        logger.info("No semantic results; using TF-IDF fallback over %d chunks", len(self.chunks))
         if not self.chunks:
+            logger.warning("Knowledge base has no chunks loaded")
             return []
         query_terms = Counter(_tokenize(query))
         query_vec = self._to_tfidf_vector(query_terms)

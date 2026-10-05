@@ -1,4 +1,4 @@
-﻿"""Phase 9: evaluation harness - functional quality metrics, safety checks, and
+"""Phase 9: evaluation harness - functional quality metrics, safety checks, and
 a documented root-cause debugging case (return-eligibility date bug).
 
 Run:  python evaluation/run_eval.py

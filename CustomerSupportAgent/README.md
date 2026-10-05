@@ -1,4 +1,4 @@
-﻿# AI Support Resolution Agent â€” Capstone Project
+# AI Support Resolution Agent — Capstone Project
 
 An AI agent for **Scenario 3: Customer Support (AI Support Resolution Agent)**, designed
 to run fully offline/reproducibly for grading, with an optional real-LLM mode.
@@ -6,8 +6,8 @@ to run fully offline/reproducibly for grading, with an optional real-LLM mode.
 The workflow is a **LangGraph `StateGraph`** with a small multi-agent design: a deterministic
 **supervisor** routes each request to a **policy agent** (retrieval + LLM, no tools, no order
 access) or an **order agent** (LLM + order tools, no policy documents), or to both for mixed
-questions and merges their answers. Redact PII â†’ safety gate â†’ memory â†’ supervisor â†’
-specialist(s) â†’ finalize / escalate. Every safety, routing, tool-permission, and memory rule
+questions and merges their answers. Redact PII → safety gate → memory → supervisor →
+specialist(s) → finalize / escalate. Every safety, routing, tool-permission, and memory rule
 is plain, unit-tested Python inside a graph node; the LLM is only reachable through a
 specialist agent, after the safety gate. Agents communicate only through shared graph state.
 LangGraph provides orchestration, per-session checkpointed memory, and node-level
@@ -21,40 +21,40 @@ same graph.
 Helps a retail customer with return/shipping/warranty policy questions and order
 status/eligibility checks. Refuses to perform any account/money-moving action, never
 fabricates policy (RAG-grounded answers only), and escalates anything sensitive,
-ambiguous, unresolved, or transactional to a human agent â€” while redacting PII before
+ambiguous, unresolved, or transactional to a human agent — while redacting PII before
 it reaches memory, retrieval, or the LLM and keeping PII out of logs.
 
 ## Project Structure
 ```
 capstone_project/
-â”œâ”€â”€ src/support_agent/        # core library
-â”‚   â”œâ”€â”€ config.py               # paths, env, feature flags
-â”‚   â”œâ”€â”€ logging_utils.py        # PII-redacted logging
-â”‚   â”œâ”€â”€ memory.py                # long-term (cross-session, non-PII) facts
-â”‚   â”œâ”€â”€ feedback.py              # feedback store + adaptive behaviour hints
-â”‚   â”œâ”€â”€ safety.py                 # deterministic refuse/escalate rules
-â”‚   â”œâ”€â”€ mock_data.py              # synthetic order data
-â”‚   â”œâ”€â”€ tools.py                   # tools + schemas + loop-guarded registry
-â”‚   â”œâ”€â”€ retrieval.py                # Qdrant-backed RAG with TF-IDF fallback
-â”‚   â”œâ”€â”€ llm_client.py               # MockLLM (offline) + OpenAI client
-â”‚   â”œâ”€â”€ graph/                      # LangGraph workflow (state, nodes, routing, builder, entrypoint)
-â”‚   â””â”€â”€ agents/
-â”‚       â”œâ”€â”€ baseline_agent.py       # Phase 2 â€” rules/templates only
-â”‚       â”œâ”€â”€ llm_agent.py            # Phase 3 â€” LLM + prompt variants
-â”‚       â”œâ”€â”€ rag_agent.py            # Phase 4 â€” + retrieval
-â”‚       â”œâ”€â”€ tool_agent.py           # Phase 5 â€” + tool calling/safeguards
-â”‚       â””â”€â”€ full_agent.py           # Phase 6/7 â€” facade over the LangGraph workflow
-â”œâ”€â”€ data/knowledge_base/        # policy/FAQ markdown docs (RAG source)
-â”œâ”€â”€ deployment/app.py            # Phase 8 â€” FastAPI deployment
-â”œâ”€â”€ evaluation/                  # Phase 9 â€” test cases + evaluation harness
-â”œâ”€â”€ demo/run_demo.py              # forced 5-interaction demo script
-â”œâ”€â”€ scripts/generate_comparisons.py  # prompt & RAG comparison tables
-â”œâ”€â”€ tests/test_tools.py           # unit tests incl. the bug-fix regression test
-â”œâ”€â”€ run_cli.py                     # interactive CLI using the full agent
-â””â”€â”€ docs/                           # required deliverable documents
+├── src/support_agent/        # core library
+│   ├── config.py               # paths, env, feature flags
+│   ├── logging_utils.py        # PII-redacted logging
+│   ├── memory.py                # long-term (cross-session, non-PII) facts
+│   ├── feedback.py              # feedback store + adaptive behaviour hints
+│   ├── safety.py                 # deterministic refuse/escalate rules
+│   ├── mock_data.py              # synthetic order data
+│   ├── tools.py                   # tools + schemas + loop-guarded registry
+│   ├── retrieval.py                # Qdrant-backed RAG with TF-IDF fallback
+│   ├── llm_client.py               # MockLLM (offline) + OpenAI client
+│   ├── graph/                      # LangGraph workflow (state, nodes, routing, builder, entrypoint)
+│   └── agents/
+│       ├── baseline_agent.py       # Phase 2 — rules/templates only
+│       ├── llm_agent.py            # Phase 3 — LLM + prompt variants
+│       ├── rag_agent.py            # Phase 4 — + retrieval
+│       ├── tool_agent.py           # Phase 5 — + tool calling/safeguards
+│       └── full_agent.py           # Phase 6/7 — facade over the LangGraph workflow
+├── data/knowledge_base/        # policy/FAQ markdown docs (RAG source)
+├── deployment/app.py            # Phase 8 — FastAPI deployment
+├── evaluation/                  # Phase 9 — test cases + evaluation harness
+├── demo/run_demo.py              # forced 5-interaction demo script
+├── scripts/generate_comparisons.py  # prompt & RAG comparison tables
+├── tests/test_tools.py           # unit tests incl. the bug-fix regression test
+├── run_cli.py                     # interactive CLI using the full agent
+└── docs/                           # required deliverable documents
 ```
 
-## Phase â†’ File Map
+## Phase → File Map
 | Phase | Deliverable | File(s) |
 |---|---|---|
 | 1. Problem framing | Doc | `docs/01_problem_framing.md` |
@@ -74,7 +74,7 @@ capstone_project/
 cd capstone_project
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-copy .env.example .env   # optional â€” defaults to offline MockLLM
+copy .env.example .env   # optional — defaults to offline MockLLM
 ```
 
 By default `USE_MOCK_LLM=true` (or auto-enabled if no `OPENAI_API_KEY` is set), so
@@ -159,38 +159,38 @@ Notes:
 - The API health endpoint is checked automatically by Docker Compose.
 - If Docker is unavailable, the ingestion and API paths fall back to a local on-disk Qdrant store under `.qdrant/`, so you can still run `scripts\ingest_knowledge_base.py` and `uvicorn deployment.app:app --reload` locally.
 
-## Safety Requirements (Scenario 3) â€” Where Enforced
-- **Refuse unsafe/policy-violating requests** â†’ `safety.py`, run by the `safety_check`
+## Safety Requirements (Scenario 3) — Where Enforced
+- **Refuse unsafe/policy-violating requests** → `safety.py`, run by the `safety_check`
   graph node; refusals route straight to `escalate` and never reach the LLM.
-- **Redact PII before model-facing steps** â†’ `logging_utils.sanitize_user_message`, applied
+- **Redact PII before model-facing steps** → `logging_utils.sanitize_user_message`, applied
   at the API/agent boundary and again in the `redact_pii` node, before memory, retrieval,
   checkpoints, and LLM calls.
-- **Never fabricate policy** â†’ `retrieval.py` + the `policy_agent` node; if nothing
+- **Never fabricate policy** → `retrieval.py` + the `policy_agent` node; if nothing
   relevant is found, the agent says so instead of guessing (verified in
   `evaluation/test_cases.py`, case TC7). Real-model evidence in
   `docs/02_prompt_comparison.md` shows why prompt wording alone is not enough.
-- **Least-privilege agents** â†’ the policy agent is given no tools, and the order agent no
+- **Least-privilege agents** → the policy agent is given no tools, and the order agent no
   policy documents. `ToolRegistry.execute(..., allowed=...)` rejects any tool outside an
   agent's allow-list, and a tool call from the policy agent escalates to a human.
-- **Escalate sensitive/unresolved cases** â†’ `tools.py:tool_escalate_to_human`, invoked by the
+- **Escalate sensitive/unresolved cases** → `tools.py:tool_escalate_to_human`, invoked by the
   `escalate` node on every safety refusal and loop-guard trip, and by the `tools` node on
   every tool failure. The final reply always mentions the ticket that was created.
-- **No personal data in logs** â†’ `logging_utils.redact_pii`, applied to every log write.
+- **No personal data in logs** → `logging_utils.redact_pii`, applied to every log write.
 
 ## Evidence Included
-- `docs/03_evaluation_report.md` â€” a 48-case evaluation (mock and real-model `gpt-4o-mini`) with
+- `docs/03_evaluation_report.md` — a 48-case evaluation (mock and real-model `gpt-4o-mini`) with
   per-category results and an honest adversarial finding, two root-caused bugs found only with a real
   model, the return-eligibility date bug with before/after proof, and a before/after
   adaptive-behaviour demonstration.
-- `docs/02_prompt_comparison.md` â€” same questions across 3 prompt variants and with/without
+- `docs/02_prompt_comparison.md` — same questions across 3 prompt variants and with/without
   retrieval, for both the mock and a real model.
 - `docs/05_demo_script.md` / `state/demo_transcript.json` (mock) and
-  `state/demo_transcript_openai.json` (real model) â€” the forced interaction transcripts.
-- `logs/agent.log`, `logs/interactions.jsonl` â€” PII-redacted run logs.
+  `state/demo_transcript_openai.json` (real model) — the forced interaction transcripts.
+- `logs/agent.log`, `logs/interactions.jsonl` — PII-redacted run logs.
 - `state/evaluation_results.json` / `state/evaluation_results_openai.json`,
-  `state/prompt_comparison*.json`, `state/rag_comparison*.json` â€” raw evidence backing
+  `state/prompt_comparison*.json`, `state/rag_comparison*.json` — raw evidence backing
   the docs above.
-- `scripts/ingest_knowledge_base.py` â€” builds chunks from `data/knowledge_base/`
+- `scripts/ingest_knowledge_base.py` — builds chunks from `data/knowledge_base/`
   and pushes them into Qdrant using the configured embedding backend.
 
 ## Known Limitations

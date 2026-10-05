@@ -1,4 +1,4 @@
-﻿"""LangGraph deployment entrypoint (LangGraph Platform / LangSmith Deployments).
+"""LangGraph deployment entrypoint (LangGraph Platform / LangSmith Deployments).
 
 Exposes the same graph that the API, demo, and evaluation run. No checkpointer is
 attached here because the hosting platform supplies its own persistence.

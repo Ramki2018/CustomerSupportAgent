@@ -1,9 +1,9 @@
-﻿# Engineering & Product Justification
+# Engineering & Product Justification
 
 ## Framework Usage: LangGraph Orchestration, Plain-Python Decisions
 
 The agent runs as a **LangGraph `StateGraph`** (`src/support_agent/graph/`). LangGraph owns
-*orchestration* â€” node sequencing, conditional routing, a checkpointer for per-session
+*orchestration* — node sequencing, conditional routing, a checkpointer for per-session
 memory, and node-level LangSmith tracing. It owns no *decisions*: every safety, tool,
 retrieval, memory, and escalation rule is plain, unit-tested Python inside a node or a
 routing function.
@@ -31,7 +31,7 @@ Why LangGraph for orchestration, and why not a heavier agent framework:
   abstractions. The project's `ToolRegistry` already validates arguments and caps tool
   calls, and keeping the existing `llm_client` lets the whole system run offline with a
   deterministic mock. Fewer abstractions between the safety rules and the model.
-- `agents/` still shows the phase-by-phase evolution (baseline â†’ LLM â†’ RAG â†’ tools â†’
+- `agents/` still shows the phase-by-phase evolution (baseline → LLM → RAG → tools →
   full), which satisfies the assignment's "show the evolution" requirement.
 
 Privacy note: only PII-sanitized text enters graph state, checkpoints, and traces
@@ -138,11 +138,11 @@ flowchart TD
 
 | Decision | Rationale | Tradeoff |
 |---|---|---|
-| Deterministic `MockLLM` default, real OpenAI optional | Fully offline, reproducible grading/demo without API keys; swap via `.env` (`USE_MOCK_LLM=false`) | MockLLM's tool-call heuristics (regex-based) are simpler than real function-calling reasoning â€” acceptable because the *agent scaffolding* (tool schemas, safety, loop guards) is identical either way. |
+| Deterministic `MockLLM` default, real OpenAI optional | Fully offline, reproducible grading/demo without API keys; swap via `.env` (`USE_MOCK_LLM=false`) | MockLLM's tool-call heuristics (regex-based) are simpler than real function-calling reasoning — acceptable because the *agent scaffolding* (tool schemas, safety, loop guards) is identical either way. |
 | Qdrant semantic retrieval with a deterministic policy-type boost, plus TF-IDF fallback | The deployed agent now needs to demonstrate end-to-end semantic retrieval while still remaining runnable in locked-down/offline environments; Qdrant gives the semantic path, while the fallback preserves reproducibility when the vector store is unavailable | The fallback path is still less semantically expressive than a fully managed vector service, but the deployed path now mirrors the submitted evidence and fixes the shipping-policy recall miss. |
-| Business rules (return-eligibility, refusal/escalation) as plain, unit-tested Python | Auditable, deterministic, testable â€” not left to LLM judgment, which could silently drift | Less "adaptive" than an LLM deciding case-by-case; acceptable since these are exactly the decisions that must be consistent for a support agent. |
+| Business rules (return-eligibility, refusal/escalation) as plain, unit-tested Python | Auditable, deterministic, testable — not left to LLM judgment, which could silently drift | Less "adaptive" than an LLM deciding case-by-case; acceptable since these are exactly the decisions that must be consistent for a support agent. |
 | Escalation "tool" writes a ticket record rather than integrating a real ticketing system | Keeps the project self-contained and reproducible | A real deployment would call an actual ticketing/CRM API. |
-| Short-term memory = sliding window (6 turns) in the LangGraph checkpointer; long-term = small non-PII key/value facts in `ConversationMemory` | Bounded state, explicit retention rule, no risk of PII accumulation | The in-process checkpointer is lost on restart (a durable SQLite/Postgres saver is the production step); cannot recall arbitrary long-ago details â€” by design. |
+| Short-term memory = sliding window (6 turns) in the LangGraph checkpointer; long-term = small non-PII key/value facts in `ConversationMemory` | Bounded state, explicit retention rule, no risk of PII accumulation | The in-process checkpointer is lost on restart (a durable SQLite/Postgres saver is the production step); cannot recall arbitrary long-ago details — by design. |
 | LangGraph for orchestration, plain Python for decisions | Safety is structural (no LLM-backed agent is reachable for refused requests), control flow is explicit and traceable, memory uses a documented mechanism | One more dependency and a small learning curve; mitigated by keeping all business logic outside the framework so it can be tested without it. |
 | Policy agent + order agent behind a deterministic supervisor | Least privilege: the policy agent has no tools and no order data; the order agent has no policy documents; permissions are enforced in `ToolRegistry`, not just in prompts. Each can be prompted, evaluated, and traced separately | Mixed requests need both agents (two LLM calls, merged reply); rule-based routing is less flexible than an LLM router (see Multi-Agent Design) |
 | Final reply must mention the escalation ticket | A real model may say "I can escalate" after a ticket was already created; the `finalize` node appends the ticket ID so the reply always matches the actual handoff state | Slightly redundant wording in some replies. |
@@ -154,13 +154,33 @@ refusal/escalation cannot be argued away by a prompt-injected user message. PII 
 in `logging_utils.py` now also runs before user text is handed to memory, retrieval, or the
 LLM, so sensitive content is masked at the boundary rather than only after the fact. Tool
 loop-prevention (`ToolRegistry.max_calls_per_turn`) guarantees the agent can't spin
-indefinitely â€” it always terminates in a bounded number of steps or escalates.
+indefinitely — it always terminates in a bounded number of steps or escalates.
+
+## Observability & Debuggability
+
+Each graph node logs one structured line tagged with the session ID through the PII-redacting
+logger (`logging_utils.py`): safety decision, memory resolution, route/variant/plan, retrieval
+candidates with best raw score and backend, tool calls, escalation reason and ticket, and the final
+grounding label and node path. Retrieval and vector-store failures (Qdrant unreachable, embedding or
+query errors) are logged with tracebacks instead of silently returning no results, because a silent
+failure looks exactly like a low retrieval score and triggers the "no documentation" reply. The
+formatter redacts every message, so a log call that includes user text cannot leak PII. Debug-level
+lines are off by default (the logger is set to INFO).
 
 ## Deployment Assumptions & Limitations
 - Runs as a single-process FastAPI app (`deployment/app.py`) serving `FullAgent`;
   suitable for a small team or a demo deployment, not yet horizontally scaled or backed
   by a real database (state is JSON files under `state/`, and agent calls are
-  serialized with a lock).
+  serialized with a lock). `docker-compose.yml` runs the API with Qdrant; without a reachable
+  Qdrant server the code uses a local on-disk store under `.qdrant/`, so `state/`, `logs/` and
+  `.qdrant/` need durable storage and a single replica.
+- Resources: the default embedding model (`all-MiniLM-L6-v2` via sentence-transformers and torch)
+  makes the image large and needs roughly 2 GB RAM or more; the first request is slow unless the
+  model is pre-downloaded. The knowledge base must be ingested (`scripts/ingest_knowledge_base.py`)
+  after every change, otherwise retrieval silently uses the weaker TF-IDF path.
+- Secrets (`OPENAI_API_KEY`, `QDRANT_API_KEY`, `LANGSMITH_API_KEY`) come from environment variables
+  or `.env`, never from the image; `scripts/package_submission.py` aborts if it finds a key. The
+  default is the offline `MockLLM`, so results with it do not predict real-model behaviour.
 - The API exposes only `/health`, `/chat`, and `/feedback`. There is no test-runner
   endpoint, and request fields are length-validated. `/chat` returns HTTP 503 before the
   agent is ready and HTTP 500 (with a request ID) on internal failure, so monitoring can
@@ -171,7 +191,7 @@ indefinitely â€” it always terminates in a bounded number of steps or escal
 - `MAX_TOOL_CALLS_PER_TURN` and `RETURN_WINDOW_DAYS` are configured in `config.py` for
   easy tuning without code changes.
 - Latency/error logging is per-request via middleware. Per-node tracing is available
-  through opt-in LangSmith tracing; metrics and alerting are not wired in yet â€” noted as a
+  through opt-in LangSmith tracing; metrics and alerting are not wired in yet — noted as a
   next step for a larger deployment.
 - Real-model behaviour was verified with `gpt-4o-mini` (see `docs/03_evaluation_report.md`),
   which also surfaced two tool-protocol bugs the offline mock could not reveal.

@@ -1,4 +1,4 @@
-﻿"""Test isolation: keep every test's writes out of the real state/ directory.
+"""Test isolation: keep every test's writes out of the real state/ directory.
 
 Without this, tests and demos append to state/feedback.json and state/long_term_memory.json,
 and the accumulated feedback silently changes which prompt variant later runs use.

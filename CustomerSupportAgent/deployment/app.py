@@ -1,4 +1,4 @@
-﻿"""Phase 8: deployment-ready HTTP API for the FullAgent.
+"""Phase 8: deployment-ready HTTP API for the FullAgent.
 
 `/chat` runs the same `FullAgent` that the demo and evaluation exercise, so the
 deployed behaviour (safety, retrieval, tools, memory, adaptation) matches the

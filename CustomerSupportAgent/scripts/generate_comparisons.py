@@ -1,4 +1,4 @@
-﻿"""Generates the Phase 3/4 comparison evidence used in docs/02_prompt_comparison.md:
+"""Generates the Phase 3/4 comparison evidence used in docs/02_prompt_comparison.md:
   - Same test set across 3 prompt variants (Prompt Comparison Rule).
   - With vs without retrieval, to show RAG's improvement over the baseline LLM.
 Run: python scripts/generate_comparisons.py

@@ -70,3 +70,75 @@ Please return:
 ## Notes for this project
 - The project is implemented and runnable; the diagram must reflect the actual system.
 - There is one execution path. The same workflow serves the API, the demo, the evaluation, and the CLI.
+- Every node writes a session-tagged, PII-redacted log line, and retrieval/vector-store failures are logged
+  rather than swallowed. Show "PII-redacted logs" as attached to the whole workflow container.
+- Qdrant is reached as a server (Docker Compose) or, if unreachable, as a local on-disk store under `.qdrant/`;
+  below that, retrieval falls back to TF-IDF. This is one fallback chain inside the policy agent, not extra flows.
+
+---
+
+## Latest architecture diagrams (reference, current implementation)
+
+### 1. Request flow (single workflow, one fork)
+
+```mermaid
+flowchart LR
+    C([Customer]) --> API["FastAPI POST /chat"]
+    API --> WF
+
+    subgraph WF["Support workflow (LangGraph)"]
+        direction LR
+        R[redact_pii] --> S{safety_check}
+        S -- allowed --> M[resolve_memory]
+        M --> SUP{"supervisor<br/>(rules, no LLM)"}
+        SUP -- policy / mixed --> PA["Policy agent<br/>retrieval + LLM<br/>no tools"]
+        SUP -- order --> OA["Order agent<br/>LLM + tools<br/>no documents"]
+        PA -- mixed --> OA
+        OA <--> T["tools<br/>allow-listed, max 3 calls"]
+        PA --> FIN[finalize]
+        OA --> FIN
+        S -- unsafe --> ESC[escalate]
+        T -- call limit / failure --> ESC
+        PA -- tool call attempted --> ESC
+    end
+
+    FIN --> OUT["JSON reply<br/>route, sources, grounding, ticket, path"]
+    ESC --> OUT
+    OUT --> API
+    API --> C
+
+    classDef policy fill:#dbeafe,stroke:#2563eb,color:#000;
+    classDef order fill:#dcfce7,stroke:#16a34a,color:#000;
+    classDef esc fill:#fee2e2,stroke:#dc2626,color:#000;
+    class PA policy;
+    class OA,T order;
+    class ESC esc;
+```
+
+### 2. Supporting stores and observability
+
+```mermaid
+flowchart TB
+    WF["Support workflow (LangGraph)"]
+    PA["Policy agent"] -->|search| KB[("Knowledge base<br/>markdown + Qdrant")]
+    KB -. "server unreachable" .-> LQ[("Local Qdrant<br/>.qdrant/")]
+    LQ -. "no results" .-> TF["TF-IDF fallback"]
+    WF <--> CP[("Session checkpointer<br/>history, last order ID")]
+    WF <--> LT[("Long-term memory file<br/>non-personal facts")]
+    FB["POST /feedback"] --> FS[("Feedback store")] -->|prompt hints| SUP["supervisor"]
+    WF --> LOG[("PII-redacted logs<br/>agent.log, interactions.jsonl")]
+    WF -. optional .-> LS["LangSmith tracing<br/>off by default"]
+    WF --> LLM{{"LLM client<br/>MockLLM or OpenAI (config switch)"}}
+```
+
+### 3. Deployment view
+
+```mermaid
+flowchart LR
+    U([Users]) --> RP["Reverse proxy<br/>TLS, auth, rate limit"]
+    RP --> API["API container<br/>FastAPI + workflow"]
+    API --> Q[("Qdrant<br/>private network")]
+    API --> V[("Volumes<br/>state/, logs/, .qdrant/")]
+    API --> O["OpenAI API<br/>optional"]
+    API -. optional .-> LS[LangSmith]
+```

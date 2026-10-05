@@ -1,4 +1,4 @@
-﻿"""Runs the required 3-5 forced interactions demo script and saves the transcript
+"""Runs the required 3-5 forced interactions demo script and saves the transcript
 to state/demo_transcript.json for use as submission evidence."""
 import json
 import sys

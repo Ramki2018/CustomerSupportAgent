@@ -1,6 +1,6 @@
-﻿# Enterprise AI Customer Support Resolution Agent: Architecture Blueprint & Suitability Analysis
+# Enterprise AI Customer Support Resolution Agent: Architecture Blueprint & Suitability Analysis
 
-> **Policy-Grounded â€¢ Safe & Compliant â€¢ High Precision â€¢ Privacy-Preserving â€¢ Enterprise Ready**
+> **Policy-Grounded • Safe & Compliant • High Precision • Privacy-Preserving • Enterprise Ready**
 
 ---
 
@@ -55,7 +55,7 @@ flowchart TD
         Node1["redact_pii\nMasks Name, Email, Phone, Address, Account ID; resets per-turn state"]:::graphNode
         Node2{"safety_check\n(Deterministic rules)"}:::graphNode
         Node3["resolve_memory + supervisor\nOrder ID / pronoun memory, deterministic routing,\nfeedback-adapted prompt"]:::graphNode
-        Node4{"policy_agent (Qdrant semantic search + TF-IDF fallback, no tools)\norder_agent â‡„ tools (validated, allow-listed, loop-guarded)"}:::graphNode
+        Node4{"policy_agent (Qdrant semantic search + TF-IDF fallback, no tools)\norder_agent ⇄ tools (validated, allow-listed, loop-guarded)"}:::graphNode
         Node5["finalize\nSources, grounding label, ticket named in reply"]:::graphNode
     end
 
@@ -168,22 +168,22 @@ gantt
 - Use the existing ingestion script to read the policy corpus from `data/knowledge_base/`.
 - Embed chunks with the configured embedding backend and upload them to Qdrant with payload metadata.
 
-#### Phase 2: Agent Orchestration Layer (`src/support_agent/graph/`) â€” implemented
+#### Phase 2: Agent Orchestration Layer (`src/support_agent/graph/`) — implemented
 - `SupportState` holds the input, the checkpointed fields (`history`, `last_order_id`), and per-turn fields (`retrieved`, `messages`, `tool_calls_made`, `ticket_id`, `trace`, ...).
 - Nodes in the shipped graph:
   1. `redact_pii`
   2. `safety_check`
   3. `resolve_memory`
   4. `supervisor` (deterministic routing)
-  5. `policy_agent` (retrieval + LLM, no tools) and `order_agent` â‡„ `tools` (LLM + allow-listed order tools, no documents)
+  5. `policy_agent` (retrieval + LLM, no tools) and `order_agent` ⇄ `tools` (LLM + allow-listed order tools, no documents)
   6. `escalate`
   7. `finalize`
 
-#### Phase 3: Verification & Citation Formatting â€” partly implemented
+#### Phase 3: Verification & Citation Formatting — partly implemented
 - Implemented: source provenance, grounding label, and ticket-in-reply guarantee (`finalize`).
 - Future work: LLM-based structured evidence verification (`policy_sufficient`, `confidence`, `needs_escalation`) and follow-up suggestions.
 
-#### Phase 4: API Endpoint & Evaluation Update â€” implemented
+#### Phase 4: API Endpoint & Evaluation Update — implemented
 - `deployment/app.py` serves the same graph via `FullAgent`; `/chat` returns the reply plus `escalated`, `ticket_id`, `sources`, `grounding`, and the node `path`.
 - `evaluation/run_eval.py` benchmarks the mock and a real model using the graph's structured result.
 

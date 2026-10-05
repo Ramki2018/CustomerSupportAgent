@@ -1,4 +1,4 @@
-﻿"""CLI entrypoint for ingesting the knowledge base into Qdrant."""
+"""CLI entrypoint for ingesting the knowledge base into Qdrant."""
 
 from __future__ import annotations
 
