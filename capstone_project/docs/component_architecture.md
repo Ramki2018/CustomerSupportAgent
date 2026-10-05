@@ -23,7 +23,7 @@ flowchart LR
         N2 -- "unsafe" --> NE["escalate"]
         N2 -- "safe" --> N3["resolve_memory"]
         N3 --> SUP{"supervisor<br/>deterministic router"}
-        SUP -- "policy / mixed" --> PA["policy_agent<br/>retrieval + LLM<br/>NO tools"]
+        SUP -- "policy / mixed" -->         PA["policy_agent<br/>retrieval + LLM<br/>NO tools<br/>skips the LLM if retrieval is weak"]
         SUP -- "order" --> OA["order_agent<br/>LLM + order tools<br/>NO documents"]
         PA -- "mixed" --> OA
         PA -- "tool call attempted" --> NE

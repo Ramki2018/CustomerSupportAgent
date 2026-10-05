@@ -67,7 +67,40 @@ order agent, and the two answers are merged without another LLM call.
   also exposed and fixed a real-model quirk (duplicate escalation tickets in one turn).
 
 **Known limits.** Routing keys on an order ID, so "where is my package?" with no ID goes to the
-policy agent. Mixed-request replies are two paragraphs rather than one synthesized answer.
+policy agent. Mixed-request replies are two independent paragraphs rather than one synthesized
+answer, and with a real model the paragraphs can contradict each other in tone (for example the
+policy paragraph saying it "cannot look up orders" beside the order agent's lookup). I tried
+telling each agent the other covers its part; it did not reliably help and once caused an
+unnecessary escalation ticket, so I reverted it. A proper fix is a short merge step (one extra
+LLM call) or a single agent for mixed requests.
+
+## Retrieval Confidence Guard and Precise Sources
+
+The policy agent no longer hands whatever the search returned to the LLM.
+- **Raw similarity, not the ranking score.** The ranking score includes a +2.0 topical boost, so
+  relevance is judged on the raw (pre-boost) similarity that each chunk now carries, along with
+  the backend that produced it.
+- **Floors measured from data.** On this knowledge base, in-scope questions scored >= 0.34 and
+  out-of-scope ones <= 0.25 (semantic), so the semantic floor is 0.30. The TF-IDF fallback is
+  weaker and differently scaled (in-scope 0.12-0.46), so its floor is 0.10 and discriminates less.
+  Both live in `config.MIN_RETRIEVAL_SCORE`.
+- **Below the floor, the LLM is not called.** The reply is a fixed "I don't have documentation on
+  that topic... I can escalate" message with `grounding=none` and no sources. This removes the
+  chance of a model guessing, which the real-model runs showed it will do without grounding.
+- **Above the floor, only relevant chunks are used.** Chunks scoring under 70% of the best are
+  dropped from both the prompt context and the Sources line (`config.SOURCE_RELATIVE_CUTOFF`),
+  so "How long does shipping take?" cites `shipping_policy` alone instead of three documents.
+- **Tradeoff.** A fixed threshold can wrongly say "no documentation" for a legitimate but oddly
+  phrased question; the margin is narrow (0.25 vs 0.34), so the floor should be re-measured
+  whenever the knowledge base changes. The score is returned as `retrieval_score` for inspection.
+
+## Known Safety Gap: the Regex Gate Misses Paraphrases
+
+The deterministic safety gate is regex-based. The 10 adversarial cases in the evaluation set show
+it catches only 2 (`docs/03_evaluation_report.md`). Missed requests still cannot cause an action,
+because no tool can refund, cancel or change an address, but they reach an LLM-backed agent and
+may not produce an escalation ticket. The fix is wider rules plus a second-layer classifier
+behind the deterministic gate; it is listed as the top follow-up, not claimed as solved.
 
 ## Architecture
 
@@ -106,6 +139,7 @@ flowchart TD
 | LangGraph for orchestration, plain Python for decisions | Safety is structural (no LLM-backed agent is reachable for refused requests), control flow is explicit and traceable, memory uses a documented mechanism | One more dependency and a small learning curve; mitigated by keeping all business logic outside the framework so it can be tested without it. |
 | Policy agent + order agent behind a deterministic supervisor | Least privilege: the policy agent has no tools and no order data; the order agent has no policy documents; permissions are enforced in `ToolRegistry`, not just in prompts. Each can be prompted, evaluated, and traced separately | Mixed requests need both agents (two LLM calls, merged reply); rule-based routing is less flexible than an LLM router (see Multi-Agent Design) |
 | Final reply must mention the escalation ticket | A real model may say "I can escalate" after a ticket was already created; the `finalize` node appends the ticket ID so the reply always matches the actual handoff state | Slightly redundant wording in some replies. |
+| Retrieval-confidence guard + relevance-filtered Sources | Below a measured raw-similarity floor the policy agent answers "no documentation" without calling the LLM; only relevant chunks reach the prompt and the Sources line | A fixed threshold can wrongly reject an oddly phrased question; must be re-measured when the knowledge base changes (see Retrieval Confidence Guard) |
 
 ## Safety Approach
 Deterministic, regex/rule-based checks in `safety.py` run **before** any LLM call, so

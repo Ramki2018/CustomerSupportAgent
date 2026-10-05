@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import re
 
+from .. import config
 from ..agents.llm_agent import PROMPT_VARIANTS
 from ..logging_utils import get_logger, log_interaction, sanitize_user_message
 from ..safety import check as safety_check
@@ -68,6 +69,32 @@ def route_for(message: str) -> str:
     return "both" if _POLICY_WORDS_PATTERN.search(message) else "order"
 
 
+NO_DOCS_REPLY = (
+    "I don't have specific documentation on that topic, so I don't want to guess. "
+    "I can escalate this to a human support specialist if you'd like."
+)
+
+
+def assess_retrieval(retrieved: list[dict]) -> tuple[list[dict], float | None, bool]:
+    """Judge retrieval confidence from raw (pre-boost) similarity.
+
+    Returns (relevant chunks, best raw score, confident). Not confident means nothing relevant
+    was found and the policy agent must not call the LLM. Chunks without a score (for example
+    from a stubbed search) are trusted unchanged.
+    """
+    if not retrieved:
+        return [], None, False
+    if any(not r.get("backend") for r in retrieved):
+        return retrieved, None, True
+
+    best = max(r["raw_score"] for r in retrieved)
+    minimum = config.MIN_RETRIEVAL_SCORE.get(retrieved[0]["backend"], 0.0)
+    if best < minimum:
+        return [], best, False
+    cutoff = max(minimum, config.SOURCE_RELATIVE_CUTOFF * best)
+    return [r for r in retrieved if r["raw_score"] >= cutoff], best, True
+
+
 def _trace(state: SupportState, name: str) -> list[str]:
     return [*state.get("trace", []), name]
 
@@ -89,6 +116,7 @@ class SupportNodes:
             "route": "",
             "retrieved": [],
             "sources": [],
+            "retrieval_score": None,
             "messages": [],
             "pending_tool_calls": [],
             "tool_calls_made": 0,
@@ -155,22 +183,37 @@ class SupportNodes:
     def policy_agent(self, state: SupportState) -> SupportState:
         """Answer policy questions from retrieved documents. Has no tools and no order access."""
         message = state["sanitized_message"]
-        retrieved = [
-            {"doc_id": chunk.doc_id, "text": chunk.text, "score": float(score)}
+        found = [
+            {
+                "doc_id": chunk.doc_id,
+                "text": chunk.text,
+                "score": float(score),
+                "raw_score": float(chunk.raw_score),
+                "backend": chunk.backend,
+            }
             for score, chunk in self.agent.kb.search(message)
         ]
-        system_prompt = PROMPT_VARIANTS[state["prompt_variant"]] + f"\n\n{POLICY_ROLE}"
-        if retrieved:
-            context = "\n\n".join(f"[{r['doc_id']}] {r['text']}" for r in retrieved)
-            system_prompt += f"\n\nRETRIEVED CONTEXT:\n{context}"
-        messages = [{"role": "system", "content": system_prompt}, *state.get("history", [])]
-
-        result = self.agent.llm.chat(messages, tools=None)
+        retrieved, best_score, confident = assess_retrieval(found)
         update: SupportState = {
             "retrieved": retrieved,
             "sources": sorted({r["doc_id"] for r in retrieved}),
             "trace": _trace(state, "policy_agent"),
         }
+        if best_score is not None:
+            update["retrieval_score"] = best_score
+
+        if not confident:
+            # Nothing relevant was retrieved: say so deterministically instead of letting a model guess.
+            logger.info(f"Retrieval confidence too low (best raw score {best_score}); skipping the LLM")
+            update.update(answer=NO_DOCS_REPLY, policy_answer=NO_DOCS_REPLY)
+            return update
+
+        system_prompt = PROMPT_VARIANTS[state["prompt_variant"]] + f"\n\n{POLICY_ROLE}"
+        context = "\n\n".join(f"[{r['doc_id']}] {r['text']}" for r in retrieved)
+        system_prompt += f"\n\nRETRIEVED CONTEXT:\n{context}"
+        messages = [{"role": "system", "content": system_prompt}, *state.get("history", [])]
+
+        result = self.agent.llm.chat(messages, tools=None)
         if result.get("tool_calls"):
             # This agent holds no tools, so a tool call is a violation: hand off to a human.
             logger.warning("Policy agent attempted a tool call; escalating")

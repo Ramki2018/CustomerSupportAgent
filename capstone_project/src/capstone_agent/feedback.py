@@ -6,6 +6,7 @@ last 10 feedback comments said responses were too long.
 """
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 
 from . import config
 from .logging_utils import redact_pii
@@ -14,12 +15,14 @@ _FEEDBACK_PATH = config.STATE_DIR / "feedback.json"
 
 
 class FeedbackStore:
-    def __init__(self):
+    def __init__(self, path: Path | str | None = None):
+        # An explicit path keeps demos, evaluations and tests from touching the real feedback file.
+        self.path = Path(path) if path else _FEEDBACK_PATH
         self.records = self._load()
 
     def _load(self) -> list:
-        if _FEEDBACK_PATH.exists():
-            return json.loads(_FEEDBACK_PATH.read_text(encoding="utf-8"))
+        if self.path.exists():
+            return json.loads(self.path.read_text(encoding="utf-8"))
         return []
 
     def _save(self) -> None:
@@ -30,7 +33,7 @@ class FeedbackStore:
             safe_r["comment"] = redact_pii(safe_r.get("comment", ""))
             safe_r["session_id"] = redact_pii(safe_r.get("session_id", ""))
             safe_records.append(safe_r)
-        _FEEDBACK_PATH.write_text(json.dumps(safe_records, indent=2), encoding="utf-8")
+        self.path.write_text(json.dumps(safe_records, indent=2), encoding="utf-8")
 
     def add(self, session_id: str, rating: int, comment: str = "") -> None:
         """rating: 1 (bad) to 5 (good)."""

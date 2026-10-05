@@ -6,3 +6,5 @@ state/
 logs/
 .env
 *.egg-info/
+.qdrant/
+.pytest_cache/

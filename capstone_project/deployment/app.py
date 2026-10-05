@@ -102,6 +102,7 @@ def chat(req: ChatRequest):
             "ticket_id": result["ticket_id"],
             "sources": result["sources"],
             "grounding": result["grounding"],
+            "retrieval_score": result["retrieval_score"],
             "route": result["route"],
             "path": result["path"],
         }

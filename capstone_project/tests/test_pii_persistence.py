@@ -5,9 +5,11 @@ import json
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from capstone_agent import config
+from capstone_agent import memory as capstone_memory
 from capstone_agent.agents.full_agent import FullAgent
 from capstone_agent.logging_utils import sanitize_user_message
 from capstone_agent.memory import ConversationMemory
+from capstone_agent.retrieval import Chunk
 from capstone_agent.feedback import FeedbackStore
 
 
@@ -17,20 +19,20 @@ def _read_file(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_memory_redacts_pii(tmp_path):
-    # Use a unique session id to avoid collisions
-    session_id = "test-session-pii"
-    mem = ConversationMemory(session_id)
+def test_memory_redacts_pii():
+    mem = ConversationMemory("test-session-pii")
     # Remember a fact that contains an email (PII)
     mem.remember("note", "Contact: alice@example.com")
-    content = _read_file(config.STATE_DIR / "long_term_memory.json")
+    content = _read_file(capstone_memory._LONG_TERM_PATH)
+    assert "test-session-pii" in content  # the file really was written
     assert "alice@example.com" not in content
 
 
-def test_feedback_redacts_pii(tmp_path):
+def test_feedback_redacts_pii():
     store = FeedbackStore()
     store.add("test-session-feedback", 5, "My email is bob@example.com")
-    content = _read_file(config.STATE_DIR / "feedback.json")
+    content = _read_file(store.path)
+    assert "test-session-feedback" in content  # the file really was written
     assert "bob@example.com" not in content
 
 
@@ -46,7 +48,8 @@ def test_user_message_is_sanitized_before_model_use(monkeypatch):
 
     def fake_search(query, top_k=None):
         captured["query"] = query
-        return []
+        # An unscored chunk is trusted, so the policy agent proceeds to call the (stubbed) LLM.
+        return [(1.0, Chunk("return_policy", "Items may be returned within 30 days."))]
 
     agent.llm = StubLLM()
     agent.kb.search = fake_search
@@ -58,7 +61,7 @@ def test_user_message_is_sanitized_before_model_use(monkeypatch):
     )
     reply = agent.handle_message("test-session-sanitize", raw_message)
 
-    assert reply == "ok"
+    assert reply.startswith("ok")
 
     expected = sanitize_user_message(raw_message)
     assert captured["query"] == expected

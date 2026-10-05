@@ -63,6 +63,10 @@ def _tokenize(text: str) -> list:
 class Chunk:
     doc_id: str
     text: str
+    # Raw similarity before the topical boost, and which backend produced it. The boosted
+    # ranking score can't be used to judge relevance, and the two backends use different scales.
+    raw_score: float = 0.0
+    backend: str = ""
 
 
 def _chunk_text(text: str, doc_id: str, max_words: int = 120) -> list:
@@ -124,7 +128,7 @@ class KnowledgeBase:
 
         if semantic_results:
             semantic_pairs = [
-                (result["score"], Chunk(result["doc_id"], result["text"]))
+                (result["score"], Chunk(result["doc_id"], result["text"], result["score"], "semantic"))
                 for result in semantic_results
             ]
             return _boost_results(semantic_pairs, query)
@@ -136,4 +140,9 @@ class KnowledgeBase:
         query_norm = math.sqrt(sum(v * v for v in query_vec.values())) or 1.0
         scored = [(self._cosine_similarity(query_vec, query_norm, i), chunk) for i, chunk in enumerate(self.chunks)]
         scored.sort(key=lambda x: x[0], reverse=True)
-        return _boost_results([(score, chunk) for score, chunk in scored[:top_k] if score > 0], query)
+        top = [
+            (score, Chunk(chunk.doc_id, chunk.text, score, "tfidf"))
+            for score, chunk in scored[:top_k]
+            if score > 0
+        ]
+        return _boost_results(top, query)

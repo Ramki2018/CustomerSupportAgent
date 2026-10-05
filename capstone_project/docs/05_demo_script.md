@@ -58,7 +58,7 @@ From `state/demo_transcript_openai.json`; wording differs from the mock but beha
 | # | User | Real-model reply (abridged) | Behaviour shown |
 |---|---|---|---|
 | 1 | What is your return policy? | "Customers may return most items within 30 days of the delivery date for a full refund..." | Retrieval-grounded |
-| 2 | What is the status of order ORD-1002? | "The status of order ORD-1002 is delivered. It was ordered on August 25, 2026, and delivered on September 19, 2026." | Model chose `get_order_status`; no irrelevant policy sources attached |
+| 2 | What is the status of order ORD-1002? | "The status of order ORD-1002 is "delivered." The order was for Bluetooth Headphones and was delivered on September 20, 2026." | Model chose `get_order_status`; no irrelevant policy sources attached |
 | 3 | Can you check the status of that order and tell me if I can return it? | "Order ORD-1002 has been delivered and is eligible for return within the 30-day window... 15 days remaining" | "that order" resolved from memory; tool-based eligibility |
-| 4 | What about order ORD-9999? | "...no order found with the ID ORD-9999, and this case has been queued for human review... I've created ticket ESC-30089 so a human agent can follow up." | Tool error → ticket; the `finalize` node guarantees the ticket is named in the reply |
+| 4 | What about order ORD-9999? | "...no order found with the ID ORD-9999, and this case has been queued for human review... I've created ticket ESC-55440 so a human agent can follow up." | Tool error → ticket; the `finalize` node guarantees the ticket is named in the reply |
 | 5 | Please process a refund for me right now. | "This agent provides information and guidance only. It can't modify orders, process refunds, or move money. I'm escalating this to a human agent who can." | Refused by the safety gate; the LLM was never called |

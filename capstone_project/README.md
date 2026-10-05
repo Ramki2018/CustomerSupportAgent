@@ -87,7 +87,8 @@ everything below runs **without any API key**. To use a real OpenAI model instea
 cd src; ..\.venv\Scripts\python.exe -m capstone_agent.agents.baseline_agent; cd ..
 
 # Interactive CLI with the full production agent
-.\.venv\Scripts\python.exe run_cli.py
+# (--debug also shows route, grounding, retrieval score, ticket and the node path per turn)
+.\.venv\Scripts\python.exe run_cli.py --debug
 
 # Forced 3-5 interaction demo script (writes state/demo_transcript.json)
 .\.venv\Scripts\python.exe demo\run_demo.py
@@ -95,14 +96,17 @@ cd src; ..\.venv\Scripts\python.exe -m capstone_agent.agents.baseline_agent; cd 
 # Prompt-variant & retrieval on/off comparison tables
 .\.venv\Scripts\python.exe scripts\generate_comparisons.py
 
-# Evaluation harness (functional tests + root-cause bug demo)
-.\.venv\Scripts\python.exe evaluation\run_eval.py
-
-# Ingest knowledge base into Qdrant
+# Ingest the knowledge base FIRST so the evaluation uses semantic search (not the TF-IDF fallback)
 .\.venv\Scripts\python.exe scripts\ingest_knowledge_base.py
 
-# Unit tests
+# Evaluation harness: 40 cases + root-cause bug demo; prints the retrieval backend it used
+.\.venv\Scripts\python.exe evaluation\run_eval.py
+
+# Unit tests (tests write to temporary folders, never to the real state/ files)
 .\.venv\Scripts\python.exe -m pytest tests -v
+
+# Build a clean submission zip (excludes .env, .venv, caches; aborts if it finds an API key)
+.\.venv\Scripts\python.exe scripts\package_submission.py
 
 # Deployment API
 .\.venv\Scripts\python.exe -m uvicorn deployment.app:app --reload
@@ -174,9 +178,10 @@ Notes:
 - **No personal data in logs** → `logging_utils.redact_pii`, applied to every log write.
 
 ## Evidence Included
-- `docs/03_evaluation_report.md` — metrics for mock and real-model (`gpt-4o-mini`) runs, two
-  root-caused bugs found only with a real model, the return-eligibility date bug with
-  before/after proof, and a before/after adaptive-behaviour demonstration.
+- `docs/03_evaluation_report.md` — a 40-case evaluation (mock and real-model `gpt-4o-mini`) with
+  per-category results and an honest adversarial finding, two root-caused bugs found only with a real
+  model, the return-eligibility date bug with before/after proof, and a before/after
+  adaptive-behaviour demonstration.
 - `docs/02_prompt_comparison.md` — same questions across 3 prompt variants and with/without
   retrieval, for both the mock and a real model.
 - `docs/05_demo_script.md` / `state/demo_transcript.json` (mock) and
@@ -197,4 +202,11 @@ Notes:
 - Retrieval is semantic Qdrant search with a deterministic policy-type boost and a
   TF-IDF fallback for offline bootstrap. See `docs/04_engineering_justification.md`
   for the deployment tradeoff.
+- **The regex safety gate misses paraphrased and injected unsafe requests** (2 of 10 adversarial
+  cases caught). Missed requests cannot trigger an action (no tool can refund, cancel or change an
+  address) but may not create an escalation ticket. See `docs/03_evaluation_report.md`.
+- **Mixed policy + order questions** are answered by two independent agents and merged, so the
+  paragraphs can read awkwardly. Routing keys on an order ID.
+- The retrieval relevance floors were measured on this small knowledge base and must be re-measured
+  if the documents change (`config.MIN_RETRIEVAL_SCORE`).
 - Order/customer data is synthetic; no real order-management system is integrated.

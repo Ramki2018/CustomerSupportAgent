@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from capstone_agent import config
 from capstone_agent.agents.full_agent import FullAgent
+from capstone_agent.feedback import FeedbackStore
 
 FORCED_INTERACTIONS = [
     ("What is your return policy?", "RAG-grounded FAQ answer."),
@@ -21,6 +22,11 @@ FORCED_INTERACTIONS = [
 
 def main():
     agent = FullAgent()
+    # Demo-only feedback store, reset each run, so the demo is deterministic and never changes
+    # the prompt variant used by the real feedback file (state/feedback.json).
+    demo_feedback = config.STATE_DIR / "demo_feedback.json"
+    demo_feedback.unlink(missing_ok=True)
+    agent.feedback_store = FeedbackStore(path=demo_feedback)
     session_id = "demo-forced"
     transcript = []
     for message, note in FORCED_INTERACTIONS:

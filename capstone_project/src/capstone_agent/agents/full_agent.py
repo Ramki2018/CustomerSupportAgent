@@ -50,6 +50,7 @@ class FullAgent(ToolAgent):
             "ticket_id": state.get("ticket_id") or None,
             "sources": state.get("sources", []),
             "grounding": state.get("grounding", ""),
+            "retrieval_score": state.get("retrieval_score"),
             "route": state.get("route") or None,
             "path": state.get("trace", []),
         }

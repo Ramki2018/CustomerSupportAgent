@@ -32,7 +32,7 @@ supervisor routes each request to a **policy agent** or an **order agent** (or b
    2. **safety_check** — deterministic refusal rules. **Branch:** if unsafe, go straight to **escalate** (no agent and no LLM runs)
    3. **resolve_memory** — recalls the last order ID and resolves "that order" / "it" (reads the session checkpointer)
    4. **supervisor** — deterministic router (rules, no LLM). Forks to one or both of:
-      - **Policy agent** — retrieves policy text (Qdrant semantic search, TF-IDF fallback) and answers with the LLM. **Has no tools and no order data.**
+      - **Policy agent** — retrieves policy text (Qdrant semantic search, TF-IDF fallback) and answers with the LLM. **Has no tools and no order data.** If retrieval is weak (below a relevance threshold) it answers "I don't have documentation" **without calling the LLM**, and it cites only relevant documents
       - **Order agent** — LLM plus order tools. **Has no policy documents.** It loops with the **tools** box: order status lookup, return-eligibility check, escalation-ticket creation (arguments validated, allow-listed per agent, maximum 3 calls per turn). If the call limit is hit, go to **escalate**
       - For a mixed question the policy agent runs first, then the order agent
    5. **finalize** — merges the agents' answers, adds source names, labels how the answer is grounded (retrieval, tool result, both, or none), and makes sure any ticket ID appears in the reply

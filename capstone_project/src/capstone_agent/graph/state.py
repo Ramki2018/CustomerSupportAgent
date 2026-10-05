@@ -35,6 +35,7 @@ class SupportState(TypedDict, total=False):
     prompt_variant: str
     route: str
     policy_answer: str
+    retrieval_score: float
     retrieved: list[dict]
     sources: list[str]
     messages: list[dict]

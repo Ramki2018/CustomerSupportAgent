@@ -1,29 +1,47 @@
-"""Phase 9: evaluation harness — functional quality metrics, safety checks, and
-a documented root-cause debugging case (return-eligibility date bug)."""
+"""Phase 9: evaluation harness - functional quality metrics, safety checks, and
+a documented root-cause debugging case (return-eligibility date bug).
+
+Run:  python evaluation/run_eval.py
+Pass/fail uses the graph's structured result (path, escalation ticket, route), with reply
+keywords as a secondary check. Results are grouped by category; `adversarial_refusal` cases are
+reported separately because they are expected to expose gaps in the regex safety layer.
+"""
 import json
 import sys
 import time
+from collections import defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from capstone_agent import config
 from capstone_agent.agents.full_agent import FullAgent
+from capstone_agent.feedback import FeedbackStore
 from capstone_agent.tools import tool_check_return_eligibility
 from test_cases import TEST_CASES
+
+
+def retrieval_backend(agent: FullAgent) -> str:
+    """Which retrieval path actually serves queries: 'semantic' (Qdrant), 'tfidf' (fallback) or 'none'."""
+    probe = agent.kb.search("How long does shipping usually take?")
+    return probe[0][1].backend if probe and probe[0][1].backend else "none"
 
 
 def run_functional_tests(agent: FullAgent) -> list:
     results = []
     for tc in TEST_CASES:
         session_id = f"eval-{tc['id']}"
+        for earlier in tc.get("setup", []):          # memory cases: earlier turns, same session
+            agent.run_turn(session_id, earlier)
+
         start = time.time()
         turn = agent.run_turn(session_id, tc["message"])
         reply = turn["reply"]
         latency_ms = round((time.time() - start) * 1000, 2)
 
         # Structured signals from the graph, not reply-text matching: a request is "refused"
-        # when the safety gate routed it away from every LLM-backed agent, and "escalated" when a ticket exists.
+        # when the safety gate routed it away from every LLM-backed agent, and "escalated" when
+        # a ticket exists.
         refused = not any(n in turn["path"] for n in ("policy_agent", "order_agent"))
         escalated = turn["escalated"]
         expected = tc["expect_keyword"]
@@ -32,15 +50,18 @@ def run_functional_tests(agent: FullAgent) -> list:
         keyword_ok = (not expected or any(k.lower() in lowered for k in expected)) and not any(
             k.lower() in lowered for k in tc.get("forbid_keywords", [])
         )
+        route_ok = tc.get("expect_route") is None or tc["expect_route"] == turn["route"]
         pass_refusal = refused == tc["expect_refusal"]
         pass_escalation = escalated == tc["expect_escalation"]
-        passed = pass_refusal and pass_escalation and keyword_ok
+        passed = pass_refusal and pass_escalation and keyword_ok and route_ok
 
         results.append({
-            "id": tc["id"], "message": tc["message"], "reply": reply,
+            "id": tc["id"], "category": tc["category"], "message": tc["message"], "reply": reply,
             "latency_ms": latency_ms, "passed": passed,
-            "pass_refusal": pass_refusal, "pass_escalation": pass_escalation, "keyword_ok": keyword_ok,
-            "path": turn["path"], "grounding": turn["grounding"],             "ticket_id": turn["ticket_id"], "route": turn["route"],
+            "pass_refusal": pass_refusal, "pass_escalation": pass_escalation,
+            "keyword_ok": keyword_ok, "route_ok": route_ok,
+            "path": turn["path"], "grounding": turn["grounding"], "ticket_id": turn["ticket_id"],
+            "route": turn["route"], "retrieval_score": turn["retrieval_score"],
         })
     return results
 
@@ -59,20 +80,46 @@ def root_cause_demo() -> dict:
     return {"order_id": order_id, "buggy_result_order_date": before, "fixed_result_delivered_date": after}
 
 
+def by_category(results: list) -> dict:
+    groups = defaultdict(lambda: {"passed": 0, "total": 0})
+    for r in results:
+        groups[r["category"]]["total"] += 1
+        groups[r["category"]]["passed"] += int(r["passed"])
+    return dict(groups)
+
+
 def main():
     agent = FullAgent()
+    # Evaluation-only feedback store, reset each run, so results never depend on accumulated
+    # feedback in the real file (which can silently switch the prompt variant).
+    eval_feedback = config.STATE_DIR / "eval_feedback.json"
+    eval_feedback.unlink(missing_ok=True)
+    agent.feedback_store = FeedbackStore(path=eval_feedback)
+
+    backend = retrieval_backend(agent)
     functional_results = run_functional_tests(agent)
     rc_demo = root_cause_demo()
 
     total = len(functional_results)
     passed = sum(r["passed"] for r in functional_results)
     avg_latency = round(sum(r["latency_ms"] for r in functional_results) / total, 2)
+    groups = by_category(functional_results)
+    core_total = sum(g["total"] for c, g in groups.items() if c != "adversarial_refusal")
+    core_passed = sum(g["passed"] for c, g in groups.items() if c != "adversarial_refusal")
 
     live = not config.USE_MOCK_LLM and bool(config.OPENAI_API_KEY)
     report = {
-        "summary": {"total_cases": total, "passed": passed, "pass_rate": round(passed / total, 2),
-                    "avg_latency_ms": avg_latency,
-                    "llm_mode": f"openai:{config.MODEL_NAME}" if live else "mock"},
+        "summary": {
+            "total_cases": total, "passed": passed, "pass_rate": round(passed / total, 2),
+            "core_cases": core_total, "core_passed": core_passed,
+            "core_pass_rate": round(core_passed / core_total, 2) if core_total else 0.0,
+            "adversarial_cases": groups.get("adversarial_refusal", {}).get("total", 0),
+            "adversarial_passed": groups.get("adversarial_refusal", {}).get("passed", 0),
+            "avg_latency_ms": avg_latency,
+            "llm_mode": f"openai:{config.MODEL_NAME}" if live else "mock",
+            "retrieval_backend": backend,
+        },
+        "by_category": groups,
         "cases": functional_results,
         "root_cause_case": rc_demo,
     }
@@ -80,16 +127,25 @@ def main():
     out_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
     print(f"Passed {passed}/{total} cases ({report['summary']['pass_rate'] * 100:.0f}%), "
-          f"avg latency {avg_latency}ms")
-    print("Per-case results:")
+          f"avg latency {avg_latency}ms | retrieval backend: {backend} | "
+          f"LLM: {report['summary']['llm_mode']}")
+    if backend != "semantic":
+        print("WARNING: semantic (Qdrant) retrieval is not serving queries - the TF-IDF fallback is. "
+              "Run scripts/ingest_knowledge_base.py first for semantic results.")
+    print(f"Core cases (excluding adversarial): {core_passed}/{core_total}")
+    print("By category:")
+    for category, g in groups.items():
+        print(f"  {category:20s} {g['passed']}/{g['total']}")
+    print("Failures:")
     for r in functional_results:
-        status = "PASS" if r["passed"] else "FAIL"
-        print(f"  [{status}] {r['id']}: {r['reply'][:100]}")
-    print(f"Root cause demo — {rc_demo['order_id']} buggy(order_date-based)={rc_demo['buggy_result_order_date']}")
+        if not r["passed"]:
+            why = [n for n, ok in (("refusal", r["pass_refusal"]), ("escalation", r["pass_escalation"]),
+                                   ("keyword", r["keyword_ok"]), ("route", r["route_ok"])) if not ok]
+            print(f"  [FAIL] {r['id']} ({','.join(why)}): {r['reply'][:90]!r}")
+    print(f"Root cause demo - {rc_demo['order_id']} buggy(order_date-based)={rc_demo['buggy_result_order_date']}")
     print(f"                              fixed(delivered_date-based)={rc_demo['fixed_result_delivered_date']}")
     print(f"Full report written to {out_path}")
 
 
 if __name__ == "__main__":
     main()
-

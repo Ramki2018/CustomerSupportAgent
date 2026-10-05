@@ -36,8 +36,10 @@ def main():
         turn = agent.run_turn(session_id, message)
         print(f"Agent: {turn['reply']}")
         if debug:
+            score = turn["retrieval_score"]
             print(
                 f"  [route={turn['route'] or '-'} | grounding={turn['grounding'] or '-'} | "
+                f"retrieval_score={'-' if score is None else f'{score:.2f}'} | "
                 f"escalated={turn['escalated']} | ticket={turn['ticket_id'] or '-'}]\n"
                 f"  [path: {' > '.join(turn['path'])}]"
             )

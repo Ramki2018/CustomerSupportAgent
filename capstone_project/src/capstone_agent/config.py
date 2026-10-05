@@ -27,6 +27,14 @@ EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM
 
 MAX_TOOL_CALLS_PER_TURN = 3
 RETRIEVAL_TOP_K = 3
+# Retrieval-confidence guard: raw (pre-boost) similarity below the minimum for its backend
+# means "no relevant documentation", so the policy agent skips the LLM instead of guessing.
+# Measured on the knowledge base: in-scope questions scored >= 0.34 and out-of-scope <= 0.25
+# (semantic). TF-IDF is a weaker, differently scaled offline fallback, so its floor is lower and
+# less discriminating. Chunks scoring below SOURCE_RELATIVE_CUTOFF x the best score are dropped
+# from both the prompt context and the Sources line.
+MIN_RETRIEVAL_SCORE = {"semantic": 0.30, "tfidf": 0.10}
+SOURCE_RELATIVE_CUTOFF = 0.7
 RETURN_WINDOW_DAYS = 30
 SHORT_TERM_MEMORY_TURNS = 6
 

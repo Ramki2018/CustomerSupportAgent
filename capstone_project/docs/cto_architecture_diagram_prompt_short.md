@@ -19,7 +19,7 @@ Inside the workflow box, in order:
 2. **safety_check** — unsafe → jump to **escalate** (no agent, no LLM)
 3. **resolve_memory** — recall order ID, resolve "that order"
 4. **supervisor** — deterministic router (no LLM), forks to:
-   - **Policy agent** — Qdrant semantic search (TF-IDF fallback) + LLM; **no tools**
+   - **Policy agent** — Qdrant semantic search (TF-IDF fallback) + LLM; **no tools**; weak retrieval -> "no documentation" without calling the LLM
    - **Order agent** ⇄ **tools** (order status, return eligibility; allow-listed, max 3 calls) + LLM; **no documents**
    - mixed question: policy agent first, then order agent
 5. **finalize** — merge answers, sources, grounding label, ticket named in reply
