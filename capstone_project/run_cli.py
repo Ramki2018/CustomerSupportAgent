@@ -1,7 +1,8 @@
 """Interactive CLI entry point for the full Capstone AI Support Resolution Agent.
 
 Usage:
-    python run_cli.py
+    python run_cli.py            # chat with the agent
+    python run_cli.py --debug    # also show route, grounding, ticket and the node path per turn
 """
 import sys
 from pathlib import Path
@@ -12,6 +13,7 @@ from capstone_agent.agents.full_agent import FullAgent
 
 
 def main():
+    debug = "--debug" in sys.argv[1:]
     agent = FullAgent()
     session_id = "cli-session"
     print("AI Support Resolution Agent (type 'exit' to quit, 'feedback <1-5> <comment>' to rate)")
@@ -31,8 +33,14 @@ def main():
             agent.record_feedback(session_id, rating, comment)
             print("Thanks for the feedback!")
             continue
-        reply = agent.handle_message(session_id, message)
-        print(f"Agent: {reply}")
+        turn = agent.run_turn(session_id, message)
+        print(f"Agent: {turn['reply']}")
+        if debug:
+            print(
+                f"  [route={turn['route'] or '-'} | grounding={turn['grounding'] or '-'} | "
+                f"escalated={turn['escalated']} | ticket={turn['ticket_id'] or '-'}]\n"
+                f"  [path: {' > '.join(turn['path'])}]"
+            )
 
 
 if __name__ == "__main__":

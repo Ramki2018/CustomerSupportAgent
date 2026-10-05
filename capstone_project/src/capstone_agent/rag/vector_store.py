@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 import os
 from functools import lru_cache
 from dataclasses import dataclass
@@ -42,6 +43,20 @@ class QdrantVectorStore(VectorStore):
 
         self._rest = rest
         self._client = self._build_client(QdrantClient)
+        # Close the client while the interpreter is still fully alive. Otherwise the client's
+        # __del__ runs during shutdown and prints "ImportError: sys.meta_path is None".
+        atexit.register(self.close)
+
+    def close(self) -> None:
+        """Close the underlying Qdrant client (safe to call more than once)."""
+        client = getattr(self, "_client", None)
+        if client is None:
+            return
+        self._client = None
+        try:
+            client.close()
+        except Exception:
+            pass
 
     def _build_client(self, qdrant_client_cls: Any):
         url = self.url or os.getenv("QDRANT_URL", "http://localhost:6333")
