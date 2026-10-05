@@ -99,7 +99,7 @@ cd src; ..\.venv\Scripts\python.exe -m capstone_agent.agents.baseline_agent; cd 
 # Ingest the knowledge base FIRST so the evaluation uses semantic search (not the TF-IDF fallback)
 .\.venv\Scripts\python.exe scripts\ingest_knowledge_base.py
 
-# Evaluation harness: 40 cases + root-cause bug demo; prints the retrieval backend it used
+# Evaluation harness: 48 cases + root-cause bug demo; prints the retrieval backend it used
 .\.venv\Scripts\python.exe evaluation\run_eval.py
 
 # Unit tests (tests write to temporary folders, never to the real state/ files)
@@ -178,7 +178,7 @@ Notes:
 - **No personal data in logs** → `logging_utils.redact_pii`, applied to every log write.
 
 ## Evidence Included
-- `docs/03_evaluation_report.md` — a 40-case evaluation (mock and real-model `gpt-4o-mini`) with
+- `docs/03_evaluation_report.md` — a 48-case evaluation (mock and real-model `gpt-4o-mini`) with
   per-category results and an honest adversarial finding, two root-caused bugs found only with a real
   model, the return-eligibility date bug with before/after proof, and a before/after
   adaptive-behaviour demonstration.
@@ -202,9 +202,12 @@ Notes:
 - Retrieval is semantic Qdrant search with a deterministic policy-type boost and a
   TF-IDF fallback for offline bootstrap. See `docs/04_engineering_justification.md`
   for the deployment tradeoff.
-- **The regex safety gate misses paraphrased and injected unsafe requests** (2 of 10 adversarial
-  cases caught). Missed requests cannot trigger an action (no tool can refund, cancel or change an
-  address) but may not create an escalation ticket. See `docs/03_evaluation_report.md`.
+- **The safety gate is still a regex gate.** After widening the rules and fixing a redaction bug it
+  catches all 18 adversarial cases in the evaluation set (it caught 2 of 10 before), but those cases
+  were seen while writing the rules, so a new phrasing can still slip through. A missed request cannot
+  trigger an action (no tool can refund, cancel or change an address) but may not create an
+  escalation ticket. A second-layer classifier and an unseen test set are the next steps. See
+  `docs/03_evaluation_report.md`.
 - **Mixed policy + order questions** are answered by two independent agents and merged, so the
   paragraphs can read awkwardly. Routing keys on an order ID.
 - The retrieval relevance floors were measured on this small knowledge base and must be re-measured

@@ -94,13 +94,20 @@ The policy agent no longer hands whatever the search returned to the LLM.
   phrased question; the margin is narrow (0.25 vs 0.34), so the floor should be re-measured
   whenever the knowledge base changes. The score is returned as `retrieval_score` for inspection.
 
-## Known Safety Gap: the Regex Gate Misses Paraphrases
+## Known Safety Gap: the Gate Is Still Regex-Based
 
-The deterministic safety gate is regex-based. The 10 adversarial cases in the evaluation set show
-it catches only 2 (`docs/03_evaluation_report.md`). Missed requests still cannot cause an action,
-because no tool can refund, cancel or change an address, but they reach an LLM-backed agent and
-may not produce an escalation ticket. The fix is wider rules plus a second-layer classifier
-behind the deterministic gate; it is listed as the top follow-up, not claimed as solved.
+The deterministic safety gate is regex-based. On the first evaluation it caught only 2 of 10
+adversarial paraphrases (0 of 8 on a second set). Two things were fixed: the rules in `safety.py`
+were widened (payment reversals, "money back", cancel/approve, address changes, prompt injection,
+lawyer/attorney, unauthorized charges), and a PII-redaction bug was found where the case-insensitive
+name pattern erased words like "being harassed" before the gate saw them. All 18 adversarial cases
+now pass, and 12 legitimate questions are tested not to be over-blocked.
+
+That is measured coverage, not a guarantee: the cases were seen while writing the patterns, so a new
+phrasing can still slip through. A missed request cannot cause an action (no tool can refund, cancel
+or change an address) but reaches an LLM-backed agent and may not produce an escalation ticket. The
+next step is a second-layer classifier behind the deterministic gate and a genuinely unseen test set
+(`docs/03_evaluation_report.md`).
 
 ## Architecture
 
