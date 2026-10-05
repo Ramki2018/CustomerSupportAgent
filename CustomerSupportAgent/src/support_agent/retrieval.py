@@ -15,6 +15,7 @@ from pathlib import Path
 from . import config
 from .logging_utils import get_logger
 from .rag.embeddings import get_embedding_provider
+from .rag.ingestion import collect_chunks
 from .rag.vector_store import get_default_vector_store
 
 logger = get_logger("retrieval")
@@ -89,9 +90,7 @@ def _chunk_text(text: str, doc_id: str, max_words: int = 120) -> list:
 
 class KnowledgeBase:
     def __init__(self, directory: Path = config.KNOWLEDGE_BASE_DIR):
-        self.chunks: list = []
-        for path in sorted(directory.glob("*.md")):
-            self.chunks.extend(_chunk_text(path.read_text(encoding="utf-8"), path.stem))
+        self.chunks: list = self._load_chunks(directory)
 
         self._doc_term_counts = [Counter(_tokenize(c.text)) for c in self.chunks]
         n_docs = len(self.chunks)
@@ -104,6 +103,19 @@ class KnowledgeBase:
         self._doc_norms = [math.sqrt(sum(v * v for v in vec.values())) or 1.0 for vec in self._doc_vectors]
         self._semantic_store = get_default_vector_store()
         self._embedding_provider = get_embedding_provider()
+
+    @staticmethod
+    def _load_chunks(directory: Path) -> list:
+        """Load the same sources and chunking as ingestion (markdown and PDF), so the TF-IDF fallback
+        covers everything Qdrant does. If PDF support is unavailable, fall back to markdown only."""
+        try:
+            return [Chunk(c.source, c.text) for c in collect_chunks(directory)]
+        except Exception:
+            logger.exception("Could not load PDF/markdown chunks via ingestion; using markdown files only")
+            chunks: list = []
+            for path in sorted(directory.glob("*.md")):
+                chunks.extend(_chunk_text(path.read_text(encoding="utf-8"), path.stem))
+            return chunks
 
     def _to_tfidf_vector(self, term_counts: Counter) -> dict:
         return {term: count * self._idf.get(term, 0.0) for term, count in term_counts.items()}
@@ -120,10 +132,13 @@ class KnowledgeBase:
         Semantic Qdrant search is tried first; TF-IDF is a fallback for offline
         environments or when the vector store is unavailable.
         """
+        # Over-fetch so the topical boost can promote the right document even when a newer or broader
+        # document (for example the policy-boundaries PDF) outranks it on raw similarity; then trim.
+        fetch_k = top_k * 3
         try:
             semantic_results = self._semantic_store.search(
                 query,
-                top_k=top_k,
+                top_k=fetch_k,
                 embedding_provider=self._embedding_provider,
             )
         except Exception:
@@ -139,7 +154,7 @@ class KnowledgeBase:
                 (result["score"], Chunk(result["doc_id"], result["text"], result["score"], "semantic"))
                 for result in semantic_results
             ]
-            return _boost_results(semantic_pairs, query)
+            return _boost_results(semantic_pairs, query)[:top_k]
 
         logger.info("No semantic results; using TF-IDF fallback over %d chunks", len(self.chunks))
         if not self.chunks:
@@ -152,7 +167,7 @@ class KnowledgeBase:
         scored.sort(key=lambda x: x[0], reverse=True)
         top = [
             (score, Chunk(chunk.doc_id, chunk.text, score, "tfidf"))
-            for score, chunk in scored[:top_k]
+            for score, chunk in scored[:fetch_k]
             if score > 0
         ]
-        return _boost_results(top, query)
+        return _boost_results(top, query)[:top_k]

@@ -54,8 +54,42 @@ class SafetyDecision:
         self.escalate = escalate
 
 
+# General "what does the policy say" questions mention actions (cancel, refund) without asking the agent to
+# perform one. They are answered from the knowledge base. Anything tied to a specific order or the customer's
+# own account ("my order", ORD-1001) is still treated as a request for action.
+_QUESTION_START = re.compile(
+    r"^\s*(is|are|can|could|do|does|will|would|what|how|when|why|where|which|am)\b", re.IGNORECASE
+)
+_POLICY_WORDS = re.compile(
+    r"\b(policy|policies|rules?|terms|allowed|permitted|possible|eligible|eligibility)\b", re.IGNORECASE
+)
+_PERSONAL_REFERENCE = re.compile(r"\b(my|mine|i|me|ord-\d+)\b", re.IGNORECASE)
+# How-to and capability questions ("How do I cancel an order?", "Can I cancel an order after it ships?",
+# "Can the assistant issue a refund?") ask what is possible, not for the agent to act. "Can you ..." and
+# "Could you ..." are excluded because those are polite requests. Any sign of a concrete request (the
+# customer's own order, an order ID, "for me", urgency, "please") keeps the message refused.
+_INFORMATIONAL_START = re.compile(
+    r"^\s*(how\s+(do|can|should|would)\s+(i|we)\b|(can|could|may)\s+(i|we)\b"
+    r"|can\s+(the|this)\s+(support\s+)?(assistant|agent|bot|chatbot)\b|is\s+it\s+possible\s+to\b"
+    r"|where\s+(do|can)\s+(i|we)\b)",
+    re.IGNORECASE,
+)
+_REQUEST_MARKERS = re.compile(
+    r"\b(my|mine|for me|ord-\d+|right now|now|immediately|right away|asap|please|today|just do it)\b",
+    re.IGNORECASE,
+)
+
+
+def is_policy_question(text: str) -> bool:
+    general_policy = bool(
+        _QUESTION_START.search(text) and _POLICY_WORDS.search(text) and not _PERSONAL_REFERENCE.search(text)
+    )
+    informational = bool(_INFORMATIONAL_START.search(text) and not _REQUEST_MARKERS.search(text))
+    return general_policy or informational
+
+
 def check(user_message: str) -> SafetyDecision:
-    if _matches_any(user_message, ACTION_KEYWORDS):
+    if _matches_any(user_message, ACTION_KEYWORDS) and not is_policy_question(user_message):
         return SafetyDecision(
             allowed=False,
             reason=("This agent provides information and guidance only. It can't modify orders, "
@@ -82,3 +116,28 @@ def check(user_message: str) -> SafetyDecision:
             escalate=True,
         )
     return SafetyDecision(allowed=True)
+
+def check_layered(user_message: str) -> SafetyDecision:
+    """Regex gate first, then the embedding classifier for phrasings the rules do not cover.
+
+    The classifier fails open: if it is disabled or errors, the regex decision stands.
+    """
+    decision = check(user_message)
+    if not decision.allowed or is_policy_question(user_message):
+        return decision
+
+    from . import config
+
+    if not config.SAFETY_CLASSIFIER_ENABLED:
+        return decision
+    try:
+        from .logging_utils import get_logger
+        from .safety_classifier import get_classifier
+
+        verdict = get_classifier().classify(user_message)
+    except Exception:
+        get_logger("safety").exception("Safety classifier failed; using the regex decision only")
+        return decision
+    if verdict.blocked:
+        return SafetyDecision(allowed=False, reason=verdict.reason, escalate=True)
+    return decision

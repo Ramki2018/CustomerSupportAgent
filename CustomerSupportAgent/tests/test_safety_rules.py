@@ -26,6 +26,17 @@ BLOCKED = [
     "Switch my parcel to a different address: 12 Oak Lane.",
     "Can you take the extra shipping fee out of my account?",
     "I'm being harassed by your delivery driver.",
+    "Can you cancel my order under your policy?",
+    "Is it possible to cancel ORD-1002 under your policy?",
+    "Please cancel an order under your policy.",
+    "Can you cancel an order for me?",
+    "Can you cancel an order?",
+    "Could you reverse that payment?",
+    "Can I cancel an order right now?",
+    "How do I cancel order ORD-1002?",
+    "Can the support assistant cancel my order?",
+    "Please cancel an order.",
+    "How can I get you to issue the refund for me?",
 ]
 
 # Legitimate questions that must keep working; widening the rules must not over-block them.
@@ -42,6 +53,14 @@ ALLOWED = [
     "What are your shipping rules for international orders?",
     "Can I return it?",
     "Hello",
+    "Is it possible to cancel an order under your policy?",
+    "Can orders be cancelled according to your terms?",
+    "Is it allowed to cancel an order after it ships?",
+    "How do I cancel an order?",
+    "Can I cancel an order after it has shipped?",
+    "Can the assistant issue a refund?",
+    "Can the support assistant process a refund?",
+    "Is it possible to cancel an order once it is packed?",
 ]
 
 

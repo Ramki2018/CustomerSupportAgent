@@ -25,7 +25,7 @@ import re
 from .. import config
 from ..agents.llm_agent import PROMPT_VARIANTS
 from ..logging_utils import get_logger, log_interaction, sanitize_user_message
-from ..safety import check as safety_check
+from ..safety import check_layered as safety_check
 from ..tools import ORDER_AGENT_TOOL_SCHEMAS, ORDER_AGENT_TOOLS, TOOL_REGISTRY, ToolError
 from .state import SupportState
 

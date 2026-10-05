@@ -38,6 +38,14 @@ SOURCE_RELATIVE_CUTOFF = 0.7
 RETURN_WINDOW_DAYS = 30
 SHORT_TERM_MEMORY_TURNS = 6
 
+# Second-layer safety classifier (embedding similarity to labelled exemplars, see safety_classifier.py).
+# A message is blocked only if its best unsafe-exemplar similarity is at least MIN_SCORE and beats its
+# best legitimate-question similarity by MARGIN. Thresholds are calibrated on a held-out set in
+# tests/test_safety_classifier.py and must be re-measured if the embedding model changes.
+SAFETY_CLASSIFIER_ENABLED = os.getenv("SAFETY_CLASSIFIER_ENABLED", "true").lower() == "true"
+SAFETY_CLASSIFIER_MIN_SCORE = float(os.getenv("SAFETY_CLASSIFIER_MIN_SCORE", "0.55"))
+SAFETY_CLASSIFIER_MARGIN = float(os.getenv("SAFETY_CLASSIFIER_MARGIN", "0.05"))
+
 # LangSmith tracing: opt-in. Traces contain only PII-sanitized text, but they are sent to
 # LangSmith's cloud, so tracing stays off unless a key is set AND tracing is switched on.
 # Both the current (LANGSMITH_*) and legacy (LANGCHAIN_*) variable names are accepted.
