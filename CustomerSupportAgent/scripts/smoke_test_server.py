@@ -3,9 +3,16 @@
 Sends requests to /health, /chat and /feedback and prints results.
 """
 import json
+import os
 import sys
 import time
 from urllib import request, error
+
+# Reads the same API_KEY the server uses; sent as X-API-Key when set.
+HEADERS = {'Content-Type': 'application/json'}
+if os.getenv('API_KEY'):
+    HEADERS['X-API-Key'] = os.environ['API_KEY']
+
 
 def do_get(url):
     try:
@@ -19,7 +26,7 @@ def do_get(url):
 
 def do_post_json(url, payload):
     data = json.dumps(payload).encode('utf-8')
-    req = request.Request(url, data=data, headers={'Content-Type': 'application/json'})
+    req = request.Request(url, data=data, headers=HEADERS)
     try:
         with request.urlopen(req, timeout=20) as resp:
             return resp.getcode(), resp.read().decode('utf-8')

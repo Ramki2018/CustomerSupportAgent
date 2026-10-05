@@ -111,6 +111,8 @@ cd src; ..\.venv\Scripts\python.exe -m support_agent.agents.baseline_agent; cd .
 # Deployment API
 .\.venv\Scripts\python.exe -m uvicorn deployment.app:app --reload
 # then: POST http://127.0.0.1:8000/chat  {"session_id": "s1", "message": "What is your return policy?"}
+# With API_KEY set in .env, add the header  X-API-Key: <your key>  to /chat and /feedback (401 otherwise).
+# /health stays open. Without API_KEY auth is off for local dev; with APP_ENV=production (Docker) it is required.
 
 # Deployment with Docker
 docker compose up --build

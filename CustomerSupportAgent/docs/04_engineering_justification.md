@@ -184,8 +184,10 @@ lines are off by default (the logger is set to INFO).
 - The API exposes only `/health`, `/chat`, and `/feedback`. There is no test-runner
   endpoint, and request fields are length-validated. `/chat` returns HTTP 503 before the
   agent is ready and HTTP 500 (with a request ID) on internal failure, so monitoring can
-  see errors. The API has no authentication; put it behind an API gateway or reverse
-  proxy before exposing it publicly.
+  see errors. `/chat` and `/feedback` require an `X-API-Key` header matching the `API_KEY` environment variable (constant-time
+  comparison, 401 otherwise); `/health` stays open. With no key configured, auth is off for local development, but with
+  `APP_ENV=production` (set in `docker-compose.yml`) the endpoints refuse all requests. This is a single shared secret,
+  not per-user auth or rate limiting, so still put the API behind a reverse proxy or gateway before exposing it publicly.
 - Order/customer data is synthetic (`mock_data.py`); a production version would call the
   retailer's real order-management API.
 - `MAX_TOOL_CALLS_PER_TURN` and `RETURN_WINDOW_DAYS` are configured in `config.py` for

@@ -7,6 +7,8 @@ submitted evidence.
 Run with (from project root, after `pip install -r requirements.txt`):
     uvicorn deployment.app:app --reload
 """
+import hmac
+import os
 import sys
 import threading
 import time
@@ -17,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -27,8 +29,31 @@ from support_agent.rag.vector_store import get_default_vector_store
 
 logger = get_logger("deployment")
 agent = None
+_auth_warned = False
 # FullAgent keeps per-session memory and JSON-file state in-process, so calls are serialized.
 agent_lock = threading.Lock()
+
+
+def require_api_key(x_api_key: str | None = Header(default=None)) -> None:
+    """Protect /chat and /feedback with a shared secret sent in the `X-API-Key` header.
+
+    The key comes from the `API_KEY` environment variable. When it is unset, auth is disabled for local
+    development (with a warning), except when `APP_ENV=production`, where the endpoints refuse all requests
+    rather than run open.
+    """
+    global _auth_warned
+    expected = os.getenv("API_KEY", "")
+    if not expected:
+        if os.getenv("APP_ENV", "").lower() == "production":
+            logger.error("API_KEY is not set in production; refusing request")
+            raise HTTPException(status_code=503, detail="auth_not_configured")
+        if not _auth_warned:
+            logger.warning("API_KEY is not set; /chat and /feedback are unauthenticated (development mode)")
+            _auth_warned = True
+        return
+    if x_api_key is None or not hmac.compare_digest(x_api_key.encode("utf-8"), expected.encode("utf-8")):
+        logger.warning("Rejected request with a missing or invalid API key")
+        raise HTTPException(status_code=401, detail="invalid_api_key")
 
 
 @asynccontextmanager
@@ -83,7 +108,7 @@ def health():
     return {"status": "ok" if agent is not None else "starting"}
 
 
-@app.post("/chat")
+@app.post("/chat", dependencies=[Depends(require_api_key)])
 def chat(req: ChatRequest):
     """Run one turn through the support graph and return the reply plus how it was produced."""
     if agent is None:
@@ -116,7 +141,7 @@ def chat(req: ChatRequest):
         })
 
 
-@app.post("/feedback")
+@app.post("/feedback", dependencies=[Depends(require_api_key)])
 def feedback(req: FeedbackRequest):
     if agent is None:
         return JSONResponse(status_code=503, content={
