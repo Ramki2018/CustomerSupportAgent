@@ -14,7 +14,11 @@ from . import config
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 _PHONE_RE = re.compile(r"\b(?:\+?\d[\s-]?){9,15}\b")
 _CARD_RE = re.compile(r"\b(?:\d[ -]*?){13,19}\b")
-_NAME_RE = re.compile(r"\b(my name is|i am|i'm|this is)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\b", re.IGNORECASE)
+# "my name is <anything>" is a strong signal, so any case is redacted. "I am / I'm / this is" is
+# ambiguous ("I'm being harassed"), so only a Capitalized name follows. Matching it
+# case-insensitively used to erase safety-relevant words before the safety gate saw them.
+_NAME_RE = re.compile(r"\b(my name is)\s+([A-Za-z][a-z]+(?:\s+[A-Za-z][a-z]+){0,2})\b", re.IGNORECASE)
+_NAME_WEAK_RE = re.compile(r"\b((?i:i am|i'm|this is))\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\b")
 _ADDRESS_RE = re.compile(
     r"\b\d{1,5}\s+(?:[A-Za-z0-9]+\s+){0,4}"
     r"(?:street|st\.?|road|rd\.?|avenue|ave\.?|lane|ln\.?|drive|dr\.?|"
@@ -43,6 +47,7 @@ def redact_pii(text: str) -> str:
     text = _ORDER_ID_KEEP_RE.sub(_keep, text)
     text = _TICKET_ID_KEEP_RE.sub(_keep, text)
     text = _NAME_RE.sub(lambda m: f"{m.group(1)} [REDACTED_NAME]", text)
+    text = _NAME_WEAK_RE.sub(lambda m: f"{m.group(1)} [REDACTED_NAME]", text)
     text = _ADDRESS_RE.sub("[REDACTED_ADDRESS]", text)
     text = _ACCOUNT_RE.sub("[REDACTED_ACCOUNT_ID]", text)
     text = _EMAIL_RE.sub("[REDACTED_EMAIL]", text)

@@ -104,8 +104,8 @@ def main():
     passed = sum(r["passed"] for r in functional_results)
     avg_latency = round(sum(r["latency_ms"] for r in functional_results) / total, 2)
     groups = by_category(functional_results)
-    core_total = sum(g["total"] for c, g in groups.items() if c != "adversarial_refusal")
-    core_passed = sum(g["passed"] for c, g in groups.items() if c != "adversarial_refusal")
+    core_total = sum(g["total"] for c, g in groups.items() if not c.startswith("adversarial"))
+    core_passed = sum(g["passed"] for c, g in groups.items() if not c.startswith("adversarial"))
 
     live = not config.USE_MOCK_LLM and bool(config.OPENAI_API_KEY)
     report = {
@@ -115,6 +115,8 @@ def main():
             "core_pass_rate": round(core_passed / core_total, 2) if core_total else 0.0,
             "adversarial_cases": groups.get("adversarial_refusal", {}).get("total", 0),
             "adversarial_passed": groups.get("adversarial_refusal", {}).get("passed", 0),
+            "holdout_cases": groups.get("adversarial_holdout", {}).get("total", 0),
+            "holdout_passed": groups.get("adversarial_holdout", {}).get("passed", 0),
             "avg_latency_ms": avg_latency,
             "llm_mode": f"openai:{config.MODEL_NAME}" if live else "mock",
             "retrieval_backend": backend,
